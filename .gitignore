@@ -20,3 +20,5 @@ out/
 *.log
 *.hprof
 *.svg
+release.keystore
+update.json

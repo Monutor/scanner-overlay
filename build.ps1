@@ -68,19 +68,22 @@ switch ($args[0]) {
       exit 1
     }
 
-    # Check gh CLI
-    $ghExists = Get-Command "gh" -ErrorAction SilentlyContinue
-    if (-not $ghExists) {
-      Write-Host "GitHub CLI (gh) not found. Install: winget install GitHub.cli" -ForegroundColor Red
-      Write-Host ("Tag " + $tag + " pushed. Upload manually.") -ForegroundColor Yellow
-      Remove-Item "update.json"
-      exit 1
+    # Check gh CLI (try PATH, then known install location)
+    $ghPath = (Get-Command "gh" -ErrorAction SilentlyContinue).Source
+    if (-not $ghPath) {
+      $ghPath = "C:\Program Files\GitHub CLI\gh.exe"
+      if (-not (Test-Path $ghPath)) {
+        Write-Host "GitHub CLI (gh) not found. Install: winget install GitHub.cli" -ForegroundColor Red
+        Write-Host ("Tag " + $tag + " pushed. Upload manually.") -ForegroundColor Yellow
+        Remove-Item "update.json"
+        exit 1
+      }
     }
 
     # Create GitHub release and upload assets
     $asset1 = $apkPath + "#app-release.apk"
     $asset2 = "update.json#update.json"
-    gh release create $tag --title $tag --notes ("Release " + $tag) $asset1 $asset2
+    & $ghPath release create $tag --title $tag --notes ("Release " + $tag) $asset1 $asset2
 
     if ($LASTEXITCODE -eq 0) {
       Write-Host ("Release " + $tag + " published!") -ForegroundColor Green
