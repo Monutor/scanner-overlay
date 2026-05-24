@@ -1,0 +1,172 @@
+package com.scanner.overlay.service
+
+import android.content.Context
+import android.content.Intent
+import android.content.SharedPreferences
+import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
+import android.os.Build
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.view.ViewConfiguration
+import android.graphics.PorterDuff
+import android.view.ViewOutlineProvider
+import android.view.WindowManager
+import android.widget.ImageView
+import com.scanner.overlay.R
+import com.scanner.overlay.overlay.OverlayActivity
+
+class FloatingScanButton(
+    private val context: Context,
+    private val prefs: SharedPreferences
+) {
+
+    private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    private val displayMetrics = context.resources.displayMetrics
+
+    private val buttonSizePx = (60 * displayMetrics.density).toInt()
+    private val defaultX: Int
+    private val defaultY: Int
+
+    private var isAdded = false
+    private var initialX = 0
+    private var initialY = 0
+    private var initialTouchX = 0f
+    private var initialTouchY = 0f
+    private var isDragging = false
+    private var lastTapTime = 0L
+
+    private val button: ImageView
+    private val params: WindowManager.LayoutParams
+
+    init {
+        val marginPx = (16 * displayMetrics.density).toInt()
+        defaultX = displayMetrics.widthPixels - buttonSizePx - marginPx
+        defaultY = (100 * displayMetrics.density).toInt()
+
+        val bg = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(0xFF1976D2.toInt())
+        }
+
+        val padding = 0
+
+        button = ImageView(context).apply {
+            setImageResource(R.drawable.ic_launcher_foreground)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            setPadding(padding, padding, padding, padding)
+            setColorFilter(android.graphics.Color.WHITE, PorterDuff.Mode.SRC_IN)
+            background = bg
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                elevation = (6 * displayMetrics.density).toFloat()
+                outlineProvider = ViewOutlineProvider.BACKGROUND
+                clipToOutline = true
+            }
+            scaleX = 1f
+            scaleY = 1f
+        }
+
+        params = WindowManager.LayoutParams(
+            buttonSizePx,
+            buttonSizePx,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = prefs.getInt(PREF_X, defaultX)
+            y = prefs.getInt(PREF_Y, defaultY)
+        }
+    }
+
+    fun show() {
+        if (isAdded) return
+        button.setOnTouchListener(touchListener)
+        windowManager.addView(button, params)
+        isAdded = true
+    }
+
+    fun hide() {
+        if (!isAdded) return
+        savePosition()
+        button.setOnTouchListener(null)
+        try {
+            windowManager.removeView(button)
+        } catch (_: IllegalArgumentException) {}
+        isAdded = false
+    }
+
+    private val touchListener = View.OnTouchListener { _, event ->
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                initialX = params.x
+                initialY = params.y
+                initialTouchX = event.rawX
+                initialTouchY = event.rawY
+                isDragging = false
+                true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val dx = event.rawX - initialTouchX
+                val dy = event.rawY - initialTouchY
+                if (!isDragging) {
+                    val slop = ViewConfiguration.get(context).scaledTouchSlop
+                    isDragging = Math.abs(dx) > slop || Math.abs(dy) > slop
+                }
+                if (isDragging) {
+                    params.x = clampX((initialX + dx).toInt())
+                    params.y = clampY((initialY + dy).toInt())
+                    try {
+                        windowManager.updateViewLayout(button, params)
+                    } catch (_: Exception) {}
+                    savePosition()
+                }
+                true
+            }
+            MotionEvent.ACTION_UP -> {
+                if (!isDragging) {
+                    val now = System.currentTimeMillis()
+                    if (now - lastTapTime > 500L) {
+                        lastTapTime = now
+                        launchScanner()
+                    }
+                } else {
+                    savePosition()
+                }
+                true
+            }
+            else -> false
+        }
+    }
+
+    private fun clampX(x: Int): Int {
+        return x.coerceIn(0, displayMetrics.widthPixels - buttonSizePx)
+    }
+
+    private fun clampY(y: Int): Int {
+        return y.coerceIn(0, displayMetrics.heightPixels - buttonSizePx)
+    }
+
+    private fun launchScanner() {
+        val intent = Intent(context, OverlayActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            addFlags(Intent.FLAG_ACTIVITY_NO_HISTORY)
+            addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+            addFlags(Intent.FLAG_ACTIVITY_NO_USER_ACTION)
+        }
+        context.startActivity(intent)
+    }
+
+    private fun savePosition() {
+        prefs.edit()
+            .putInt(PREF_X, params.x)
+            .putInt(PREF_Y, params.y)
+            .apply()
+    }
+
+    companion object {
+        private const val PREF_X = "floating_button_x"
+        private const val PREF_Y = "floating_button_y"
+    }
+}

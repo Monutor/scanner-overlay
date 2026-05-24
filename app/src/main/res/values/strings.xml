@@ -1,0 +1,26 @@
+<resources>
+    <string name="app_name">Scanner Overlay</string>
+    <string name="channel_name">Сканер</string>
+    <string name="channel_description">Уведомления сервиса сканирования</string>
+    <string name="notification_title">Сканер готов</string>
+    <string name="notification_text">Нажмите для сканирования</string>
+    <string name="scan_action">Стоп</string>
+    <string name="settings_title">Настройки</string>
+    <string name="service_enabled">Служба запущена</string>
+    <string name="service_disabled">Служба остановлена</string>
+    <string name="sew_package_label">Пакет SEW</string>
+    <string name="scan_sound_label">Звук при сканировании</string>
+    <string name="check_permissions">Проверить разрешения</string>
+    <string name="status_service">Статус сервиса</string>
+    <string name="status_sew">SEW обнаружено</string>
+    <string name="status_sew_not_found">SEW не обнаружено</string>
+    <string name="camera_unavailable">Камера недоступна</string>
+    <string name="barcode_found">Штрихкод найден</string>
+    <string name="enter_manually">Ввести вручную</string>
+    <string name="close">Закрыть</string>
+    <string name="permission_required">Требуется разрешение</string>
+    <string name="overlay_permission_hint">Разрешите отображать поверх других приложений</string>
+    <string name="accessibility_permission_hint">Включите ScannerOverlay в специальных возможностях</string>
+    <string name="start_service">Запустить службу</string>
+    <string name="stop_service">Остановить службу</string>
+</resources>

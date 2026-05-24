@@ -1,0 +1,7 @@
+<resources>
+    <color name="overlay_background">#80000000</color>
+    <color name="scan_success">#4CAF50</color>
+    <color name="scan_error">#F44336</color>
+    <color name="white">#FFFFFF</color>
+    <color name="black">#FF000000</color>
+</resources>

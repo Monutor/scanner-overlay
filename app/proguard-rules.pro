@@ -1,0 +1,3 @@
+-keep class com.scanner.overlay.** { *; }
+-dontwarn com.google.mlkit.**
+-keep class com.google.mlkit.** { *; }

@@ -1,0 +1,461 @@
+package com.scanner.overlay.settings
+
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.scanner.overlay.update.UpdateInfo
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreen(
+    viewModel: SettingsViewModel = hiltViewModel()
+) {
+    val isFloatingButtonEnabled by viewModel.isFloatingButtonEnabled.collectAsState()
+    val scanTimeoutMs by viewModel.scanTimeoutMs.collectAsState()
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.refreshServiceState()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val cameraGranted = ContextCompat.checkSelfPermission(
+        context, Manifest.permission.CAMERA
+    ) == PackageManager.PERMISSION_GRANTED
+
+    val overlayGranted = android.provider.Settings.canDrawOverlays(context)
+    val accessibilityGranted = viewModel.isAccessibilityServiceEnabled()
+
+    val updateState by viewModel.updateState.collectAsState()
+    val currentVersion = viewModel.currentVersion
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Scanner Overlay") },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                )
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(16.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            ServiceCard(
+                isEnabled = isFloatingButtonEnabled,
+                onToggle = { viewModel.toggleService() }
+            )
+
+            TimeoutCard(
+                timeoutMs = scanTimeoutMs,
+                onTimeoutChange = { viewModel.updateScanTimeout(it) }
+            )
+
+            PermissionsCard(
+                cameraGranted = cameraGranted,
+                overlayGranted = overlayGranted,
+                accessibilityGranted = accessibilityGranted,
+                onOpenOverlaySettings = { viewModel.openOverlaySettings() },
+                onOpenAccessibilitySettings = { viewModel.openAccessibilitySettings() }
+            )
+
+            UpdateCard(
+                state = updateState,
+                currentVersion = currentVersion,
+                onCheck = { viewModel.checkForUpdate() },
+                onDownload = { info -> viewModel.downloadUpdate(info) },
+                onDismiss = { viewModel.resetUpdateState() }
+            )
+
+            StatusCard(
+                floatingButtonEnabled = isFloatingButtonEnabled,
+                cameraGranted = cameraGranted,
+                overlayGranted = overlayGranted,
+                accessibilityGranted = accessibilityGranted
+            )
+        }
+    }
+}
+
+@Composable
+private fun ServiceCard(
+    isEnabled: Boolean,
+    onToggle: () -> Unit
+) {
+    Card {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    "Плавающая кнопка",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    if (isEnabled) "Отображается поверх всех приложений" else "Скрыта",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = isEnabled,
+                onCheckedChange = { onToggle() }
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TimeoutCard(
+    timeoutMs: Long,
+    onTimeoutChange: (Long) -> Unit
+) {
+    val options = listOf(
+        15_000L to "15 сек",
+        30_000L to "30 сек",
+        45_000L to "45 сек",
+        60_000L to "60 сек",
+        90_000L to "90 сек",
+        120_000L to "120 сек"
+    )
+    var expanded by remember { mutableStateOf(false) }
+    val label = options.find { it.first == timeoutMs }?.second
+        ?: "${timeoutMs / 1000} сек"
+
+    Card {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                "Таймаут сканирования",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Время ожидания перед появлением ручного ввода",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+
+            ExposedDropdownMenuBox(
+                expanded = expanded,
+                onExpandedChange = { expanded = !expanded }
+            ) {
+                OutlinedTextField(
+                    value = label,
+                    onValueChange = {},
+                    readOnly = true,
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor(),
+                    singleLine = true
+                )
+
+                ExposedDropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false }
+                ) {
+                    options.forEach { (ms, text) ->
+                        DropdownMenuItem(
+                            text = { Text(text) },
+                            onClick = {
+                                onTimeoutChange(ms)
+                                expanded = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PermissionsCard(
+    cameraGranted: Boolean,
+    overlayGranted: Boolean,
+    accessibilityGranted: Boolean,
+    onOpenOverlaySettings: () -> Unit,
+    onOpenAccessibilitySettings: () -> Unit
+) {
+    Card {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                "Разрешения",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(Modifier.height(8.dp))
+            PermissionRow(
+                label = "Камера",
+                granted = cameraGranted,
+                onClick = {}
+            )
+            PermissionRow(
+                label = "Поверх других приложений",
+                granted = overlayGranted,
+                onClick = onOpenOverlaySettings
+            )
+            PermissionRow(
+                label = "Специальные возможности",
+                granted = accessibilityGranted,
+                onClick = onOpenAccessibilitySettings
+            )
+        }
+    }
+}
+
+@Composable
+private fun StatusCard(
+    floatingButtonEnabled: Boolean,
+    cameraGranted: Boolean,
+    overlayGranted: Boolean,
+    accessibilityGranted: Boolean
+) {
+    Card {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                "Статус",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(Modifier.height(8.dp))
+            StatusRow("Плавающая кнопка", if (floatingButtonEnabled) "Показана" else "Скрыта")
+            StatusRow("Камера", if (cameraGranted) "✓" else "✗")
+            StatusRow("Overlay", if (overlayGranted) "✓" else "✗")
+            StatusRow("Accessibility", if (accessibilityGranted) "✓" else "✗")
+        }
+    }
+}
+
+@Composable
+private fun PermissionRow(
+    label: String,
+    granted: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label)
+        IconButton(onClick = onClick) {
+            Icon(
+                imageVector = if (granted) Icons.Default.Check else Icons.Default.Close,
+                contentDescription = null,
+                tint = if (granted) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.error
+            )
+        }
+    }
+}
+
+@Composable
+private fun StatusRow(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(label, fontWeight = FontWeight.Medium)
+        Text(value)
+    }
+}
+
+@Composable
+private fun UpdateCard(
+    state: UpdateUiState,
+    currentVersion: String,
+    onCheck: () -> Unit,
+    onDownload: (UpdateInfo) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var showDialog by remember { mutableStateOf<UpdateInfo?>(null) }
+
+    LaunchedEffect(state) {
+        if (state is UpdateUiState.UpToDate) {
+            kotlinx.coroutines.delay(3000)
+            onDismiss()
+        }
+    }
+
+    Card {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                "Обновления",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Текущая версия: v$currentVersion",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(12.dp))
+
+            when (val s = state) {
+                is UpdateUiState.Idle -> {
+                    Button(
+                        onClick = onCheck,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Проверить обновления")
+                    }
+                }
+
+                is UpdateUiState.Checking -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text("Проверка...")
+                    }
+                }
+
+                is UpdateUiState.UpToDate -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("У вас актуальная версия")
+                    }
+                }
+
+                is UpdateUiState.Available -> {
+                    Text(
+                        "Доступна версия v${s.info.versionName}",
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { showDialog = s.info },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Что нового")
+                        }
+                        Button(
+                            onClick = { onDownload(s.info) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Установить")
+                        }
+                    }
+                }
+
+                is UpdateUiState.Downloading -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text("Скачивание...")
+                    }
+                }
+
+                is UpdateUiState.Error -> {
+                    Text(
+                        s.message,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = onCheck,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Повторить")
+                    }
+                }
+            }
+        }
+    }
+
+    showDialog?.let { info ->
+        AlertDialog(
+            onDismissRequest = { showDialog = null },
+            title = { Text("v${info.versionName}") },
+            text = {
+                if (info.releaseNotes.isNotBlank()) {
+                    Text(info.releaseNotes)
+                } else {
+                    Text("Нет описания изменений")
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDialog = null
+                    onDownload(info)
+                }) {
+                    Text("Установить")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDialog = null }) {
+                    Text("Закрыть")
+                }
+            }
+        )
+    }
+}

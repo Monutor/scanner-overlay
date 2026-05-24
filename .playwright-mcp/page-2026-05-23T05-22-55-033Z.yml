@@ -1,0 +1,105 @@
+- generic [active] [ref=e1]:
+  - heading "Scanner Overlay" [level=1] [ref=e2]
+  - paragraph [ref=e3]: 7 вариантов дизайна — нажми на понравившийся
+  - generic [ref=e4]:
+    - generic [ref=e5] [cursor=pointer]:
+      - generic [ref=e6]:
+        - generic [ref=e7]: A
+        - text: Corner-Only
+      - heading "Минимализм" [level=3] [ref=e8]
+      - paragraph [ref=e9]: Только 4 уголка вместо рамки. Зелёная анимация сканирования. Минимум UI — камера на весь экран.
+      - generic [ref=e10]:
+        - generic [ref=e12]:
+          - generic [ref=e13]: Наведите на штрихкод
+          - generic [ref=e14]: ✕
+        - generic [ref=e21]:
+          - generic [ref=e22]: ⚡
+          - generic [ref=e23]: abc
+    - generic [ref=e24] [cursor=pointer]:
+      - generic [ref=e25]:
+        - generic [ref=e26]: B
+        - text: Neon
+      - heading "Неоновый сканер" [level=3] [ref=e27]
+      - paragraph [ref=e28]: Зелёная неоновая рамка с glow-эффектом. Анимированная линия. Стеклянная панель снизу с размытием.
+      - generic [ref=e29]:
+        - generic [ref=e38]: · scanning ·
+        - generic [ref=e40]: ✕
+        - generic [ref=e41]:
+          - generic [ref=e42]: Автосканирование
+          - generic [ref=e43]:
+            - generic [ref=e44]: ⚡
+            - generic [ref=e45]: abc
+    - generic [ref=e46] [cursor=pointer]:
+      - generic [ref=e47]:
+        - generic [ref=e48]: C
+        - text: Material3
+      - heading "Material You" [level=3] [ref=e49]
+      - paragraph [ref=e50]: Акцентный цвет (Primary). Скруглённая рамка с точками по углам. Scrim-затемнение. Карточка снизу.
+      - generic [ref=e51]:
+        - generic [ref=e55]:
+          - generic [ref=e56]: 📷 Штрихкод
+          - generic [ref=e57]: ✕
+        - generic [ref=e64]:
+          - generic [ref=e65]: Автоматическое сканирование
+          - generic [ref=e66]:
+            - generic [ref=e67]: ⚡
+            - generic [ref=e68]: abc
+    - generic [ref=e69] [cursor=pointer]:
+      - generic [ref=e70]:
+        - generic [ref=e71]: D
+        - text: Immersive
+      - heading "Безрамочный" [level=3] [ref=e72]
+      - paragraph [ref=e73]: Камера на весь экран. Незаметные уголки. Подсказка «Наведите». Bottom Sheet с кнопками-пилюлями.
+      - generic [ref=e74]:
+        - generic [ref=e80]: наведите на штрихкод
+        - generic [ref=e83]:
+          - generic [ref=e84]: ⚡ Фонарик
+          - generic [ref=e85]: ✕
+          - generic [ref=e86]: ⌨ Ввести
+    - generic [ref=e87] [cursor=pointer]:
+      - generic [ref=e88]:
+        - generic [ref=e89]: E
+        - text: VisionPro
+      - heading "Vision Pro / iOS Style" [level=3] [ref=e90]
+      - paragraph [ref=e91]: Frosted glass, скруглённый viewfinder, матовые blur-элементы. Вдохновлён Apple — минималистично и дорого.
+      - generic [ref=e92]:
+        - generic [ref=e96]: Штрихкод
+        - generic [ref=e99]: наведите на код
+        - generic [ref=e100]:
+          - generic [ref=e101]: ⌘
+          - generic [ref=e102]: ⚡
+          - generic [ref=e103]: ⌨
+        - generic [ref=e104]: Scanner — Ready
+    - generic [ref=e105] [cursor=pointer]:
+      - generic [ref=e106]:
+        - generic [ref=e107]: F
+        - text: Cyberpunk
+      - heading "Cyberpunk / Retrowave" [level=3] [ref=e108]
+      - paragraph [ref=e109]: Неон pink/cyan, сетка на фоне. Цифровая эстетика. Двойная цветная линия сканирования.
+      - generic [ref=e110]:
+        - generic [ref=e119]: scanning
+        - generic [ref=e120]:
+          - generic [ref=e121]: ● online
+          - generic [ref=e122]: ✕
+        - generic [ref=e123]:
+          - generic [ref=e124]: ⟳ Сканировать
+          - generic [ref=e125]: ⌨
+          - generic [ref=e126]: ⚡
+    - generic [ref=e127] [cursor=pointer]:
+      - generic [ref=e128]:
+        - generic [ref=e129]: G
+        - text: Radar
+      - heading "Радар / Круговой сканер" [level=3] [ref=e130]
+      - paragraph [ref=e131]: Круговая рамка вместо прямоугольной. Концентрические кольца. Анимация вращающегося радара.
+      - generic [ref=e132]:
+        - generic [ref=e143]: поиск
+        - generic [ref=e144]:
+          - generic [ref=e145]: 📷 Камера
+          - generic [ref=e146]: ✕
+        - generic [ref=e147]:
+          - generic [ref=e148]: ⚡
+          - generic [ref=e149]: ⌨ Ввести
+          - generic [ref=e150]: ✕
+  - generic [ref=e151]:
+    - generic [ref=e152]: Вариант не выбран
+    - button "Выбрать этот вариант" [ref=e153] [cursor=pointer]
