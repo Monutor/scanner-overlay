@@ -454,15 +454,15 @@ public final class DaggerScannerApp_HiltComponents_SingletonC {
 
     @IdentifierNameString
     private static final class LazyClassKeyProvider {
-      static String com_scanner_overlay_settings_SettingsViewModel = "com.scanner.overlay.settings.SettingsViewModel";
-
       static String com_scanner_overlay_overlay_OverlayViewModel = "com.scanner.overlay.overlay.OverlayViewModel";
 
-      @KeepFieldType
-      SettingsViewModel com_scanner_overlay_settings_SettingsViewModel2;
+      static String com_scanner_overlay_settings_SettingsViewModel = "com.scanner.overlay.settings.SettingsViewModel";
 
       @KeepFieldType
       OverlayViewModel com_scanner_overlay_overlay_OverlayViewModel2;
+
+      @KeepFieldType
+      SettingsViewModel com_scanner_overlay_settings_SettingsViewModel2;
     }
 
     private static final class SwitchingProvider<T> implements Provider<T> {

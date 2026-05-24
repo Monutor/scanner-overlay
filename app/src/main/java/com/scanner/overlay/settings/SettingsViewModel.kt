@@ -70,6 +70,10 @@ class SettingsViewModel @Inject constructor(
             prefs.edit().putBoolean(PREF_KEY_SERVICE_RUNNING, false).apply()
             _isFloatingButtonEnabled.value = false
         } else {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(app)) {
+                openOverlaySettings()
+                return
+            }
             intent.action = ScannerForegroundService.ACTION_START
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 app.startForegroundService(intent)

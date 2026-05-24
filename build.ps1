@@ -93,6 +93,15 @@ switch ($args[0]) {
 
     Remove-Item "update.json"
   }
+  "install-release" {
+    Write-Host "Building release APK..." -ForegroundColor Cyan
+    ./gradlew assembleRelease
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host "Build failed!" -ForegroundColor Red
+      exit 1
+    }
+    & $ADB_PATH install -r "app\build\outputs\apk\release\app-release.apk"
+  }
   default {
     # Try to find the APK in either location
     $apkPath = "app\build\outputs\apk\debug\app-debug.apk"
