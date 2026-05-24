@@ -35,9 +35,13 @@ switch ($args[0]) {
 
     Write-Host ("Version: v" + $versionName + " (" + $versionCode + ")") -ForegroundColor Cyan
 
+    # Find signed or unsigned APK
     $apkPath = "app\build\outputs\apk\release\app-release.apk"
     if (-not (Test-Path $apkPath)) {
-      Write-Host ("APK not found at " + $apkPath) -ForegroundColor Red
+      $apkPath = "app\build\outputs\apk\release\app-release-unsigned.apk"
+    }
+    if (-not (Test-Path $apkPath)) {
+      Write-Host "APK not found in app\build\outputs\apk\release\" -ForegroundColor Red
       exit 1
     }
 
