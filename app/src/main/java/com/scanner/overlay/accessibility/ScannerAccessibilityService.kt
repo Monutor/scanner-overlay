@@ -119,6 +119,7 @@ class ScannerAccessibilityService : AccessibilityService() {
             repeat(queue.size) {
                 val node = queue.poll() ?: return@repeat
                 if (node.isEditable || node.isFocused) {
+                    clearQueue(queue)
                     return node
                 }
                 for (i in 0 until node.childCount) {
@@ -128,7 +129,71 @@ class ScannerAccessibilityService : AccessibilityService() {
             }
             depth++
         }
+        clearQueue(queue)
         return null
+    }
+
+    private fun findSendButton(
+        root: AccessibilityNodeInfo,
+        targets: List<String>
+    ): AccessibilityNodeInfo? {
+        val queue = java.util.ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var depth = 0
+        while (queue.isNotEmpty() && depth < 50) {
+            repeat(queue.size) {
+                val node = queue.poll() ?: return@repeat
+                val cd = node.contentDescription?.toString() ?: ""
+                if (cd.isNotEmpty() && targets.any { cd.contains(it, ignoreCase = true) }) {
+                    clearQueue(queue)
+                    return node
+                }
+                val nodeText = node.text?.toString() ?: ""
+                if (nodeText.isNotEmpty() && targets.any { nodeText.contains(it, ignoreCase = true) }) {
+                    clearQueue(queue)
+                    return node
+                }
+                for (i in 0 until node.childCount) {
+                    val child = node.getChild(i) ?: continue
+                    queue.add(child)
+                }
+            }
+            depth++
+        }
+        clearQueue(queue)
+        return null
+    }
+
+    private fun findNodeContaining(root: AccessibilityNodeInfo, text: String): AccessibilityNodeInfo? {
+        val queue = java.util.ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var depth = 0
+        while (queue.isNotEmpty() && depth < 50) {
+            repeat(queue.size) {
+                val node = queue.poll() ?: return@repeat
+                val nodeText = node.text?.toString() ?: ""
+                val contentDesc = node.contentDescription?.toString() ?: ""
+                if (nodeText.contains(text, ignoreCase = true) || contentDesc.contains(text, ignoreCase = true)) {
+                    clearQueue(queue)
+                    return node
+                }
+                for (i in 0 until node.childCount) {
+                    val child = node.getChild(i) ?: continue
+                    queue.add(child)
+                }
+            }
+            depth++
+        }
+        clearQueue(queue)
+        return null
+    }
+
+    private fun clearQueue(queue: java.util.ArrayDeque<AccessibilityNodeInfo>) {
+        var node: AccessibilityNodeInfo? = queue.poll()
+        while (node != null) {
+            node.recycle()
+            node = queue.poll()
+        }
     }
 
     private fun setText(node: AccessibilityNodeInfo, text: String) {
@@ -246,56 +311,6 @@ class ScannerAccessibilityService : AccessibilityService() {
                 }
             }
         }, timeoutMs)
-    }
-
-    private fun findSendButton(
-        root: AccessibilityNodeInfo,
-        targets: List<String>
-    ): AccessibilityNodeInfo? {
-        val queue = java.util.ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-        var depth = 0
-        while (queue.isNotEmpty() && depth < 50) {
-            repeat(queue.size) {
-                val node = queue.poll() ?: return@repeat
-                val cd = node.contentDescription?.toString() ?: ""
-                if (cd.isNotEmpty() && targets.any { cd.contains(it, ignoreCase = true) }) {
-                    return node
-                }
-                val nodeText = node.text?.toString() ?: ""
-                if (nodeText.isNotEmpty() && targets.any { nodeText.contains(it, ignoreCase = true) }) {
-                    return node
-                }
-                for (i in 0 until node.childCount) {
-                    val child = node.getChild(i) ?: continue
-                    queue.add(child)
-                }
-            }
-            depth++
-        }
-        return null
-    }
-
-    private fun findNodeContaining(root: AccessibilityNodeInfo, text: String): AccessibilityNodeInfo? {
-        val queue = java.util.ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-        var depth = 0
-        while (queue.isNotEmpty() && depth < 50) {
-            repeat(queue.size) {
-                val node = queue.poll() ?: return@repeat
-                val nodeText = node.text?.toString() ?: ""
-                val contentDesc = node.contentDescription?.toString() ?: ""
-                if (nodeText.contains(text, ignoreCase = true) || contentDesc.contains(text, ignoreCase = true)) {
-                    return node
-                }
-                for (i in 0 until node.childCount) {
-                    val child = node.getChild(i) ?: continue
-                    queue.add(child)
-                }
-            }
-            depth++
-        }
-        return null
     }
 
     companion object {

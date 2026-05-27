@@ -30,13 +30,17 @@ object AutoUpdateManager {
         "https://github.com/Monutor/scanner-overlay/releases/latest/download/update.json"
 
     suspend fun checkForUpdate(): UpdateResult = withContext(Dispatchers.IO) {
+        val conn = try {
+            URL(UPDATE_JSON_URL).openConnection() as HttpURLConnection
+        } catch (e: Exception) {
+            return@withContext UpdateResult.Error(e.message ?: "Ошибка подключения")
+        }
+        var responseCode = -1
         try {
-            val url = URL(UPDATE_JSON_URL)
-            val conn = url.openConnection() as HttpURLConnection
             conn.connectTimeout = 10_000
             conn.readTimeout = 15_000
 
-            val responseCode = conn.responseCode
+            responseCode = conn.responseCode
             if (responseCode != HttpURLConnection.HTTP_OK) {
                 return@withContext UpdateResult.Error("HTTP $responseCode")
             }
@@ -51,23 +55,29 @@ object AutoUpdateManager {
                 releaseNotes = obj.optString("releaseNotes", "")
             )
 
-            return@withContext if (info.versionCode > BuildConfig.VERSION_CODE) {
+            if (info.versionCode > BuildConfig.VERSION_CODE) {
                 UpdateResult.Available(info)
             } else {
                 UpdateResult.UpToDate
             }
         } catch (e: Exception) {
-            return@withContext UpdateResult.Error(e.message ?: "Ошибка проверки")
+            UpdateResult.Error(e.message ?: "Ошибка проверки")
+        } finally {
+            conn.disconnect()
         }
     }
 
     suspend fun downloadAndInstall(context: Context, info: UpdateInfo): Result<Unit> = withContext(Dispatchers.IO) {
+        val conn = try {
+            URL(info.downloadUrl).openConnection() as HttpURLConnection
+        } catch (e: Exception) {
+            return@withContext Result.failure(e)
+        }
+        var file: File? = null
         try {
-            val file = File(context.externalCacheDir, "app-update.apk")
+            file = File(context.externalCacheDir, "app-update.apk")
             if (file.exists()) file.delete()
 
-            val url = URL(info.downloadUrl)
-            val conn = url.openConnection() as HttpURLConnection
             conn.connectTimeout = 15_000
             conn.readTimeout = 60_000
 
@@ -101,6 +111,8 @@ object AutoUpdateManager {
             }
         } catch (e: Exception) {
             Result.failure(e)
+        } finally {
+            conn.disconnect()
         }
     }
 }

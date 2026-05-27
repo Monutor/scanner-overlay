@@ -49,7 +49,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.activity.compose.BackHandler
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.Lifecycle
 import dagger.hilt.android.AndroidEntryPoint
+import androidx.compose.runtime.DisposableEffect
 import com.scanner.overlay.R
 import com.scanner.overlay.accessibility.ScannerAccessibilityService
 import com.scanner.overlay.scanner.BarcodeAnalyzer
@@ -169,6 +172,10 @@ class OverlayActivity : ComponentActivity() {
         }
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        finishHandler.removeCallbacks(finishRunnable)
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -541,11 +548,28 @@ fun CameraPreview(
     val cameraControl = remember { mutableStateOf<CameraControl?>(null) }
     var scanCompleted by remember { mutableStateOf(false) }
     val currentOnShowManualInput = rememberUpdatedState(onShowManualInput)
+    val cameraProviderRef = remember { mutableStateOf<ProcessCameraProvider?>(null) }
 
     LaunchedEffect(torchOn, cameraControl.value) {
         try {
             cameraControl.value?.enableTorch(torchOn)
         } catch (_: Exception) {}
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_DESTROY) {
+                cameraProviderRef.value?.unbindAll()
+                cameraControl.value = null
+                cameraProviderRef.value = null
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { 
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            cameraProviderRef.value?.unbindAll()
+            cameraControl.value = null
+        }
     }
 
     AndroidView(
@@ -556,6 +580,7 @@ fun CameraPreview(
             val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
             cameraProviderFuture.addListener({
                 val cameraProvider = cameraProviderFuture.get()
+                cameraProviderRef.value = cameraProvider
                 val preview = Preview.Builder().build().also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }

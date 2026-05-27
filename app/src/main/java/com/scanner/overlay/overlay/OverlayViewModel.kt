@@ -26,11 +26,16 @@ class OverlayViewModel @Inject constructor(
     private val _isScanTimedOut = MutableStateFlow(false)
     val isScanTimedOut: StateFlow<Boolean> = _isScanTimedOut.asStateFlow()
 
-    private val timeoutJob = viewModelScope.launch {
+    private var timeoutJob = viewModelScope.launch {
         val timeoutMs = prefs.getLong("scan_timeout_ms", 45_000L)
         delay(timeoutMs)
         _isScanTimedOut.value = true
         _state.value = OverlayState.Error
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        timeoutJob.cancel()
     }
 
     fun onBarcodeDetected(result: ScannerResult.Success) {
