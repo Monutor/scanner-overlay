@@ -46,25 +46,10 @@ switch ($args[0]) {
     }
 
     # Create update.json with release notes
-    $releaseNotes = @"
-**Исправлено:**
-- Сканер неверно выбирал штрихкод на полке: центр кадра пересчитан с учётом поворота камеры
-- Двойная инъекция текста: наложение finishRunnable и onBarcodeScanned приводило к битому тексту
-- Задержка закрытия оверлея 7с для товаров уменьшена до 3с (как для полок)
-
-**Улучшено:**
-- Штрихкоды товаров (не начинающиеся на STL) пропускают проверку по базе — быстрее и без ложных "не найдено"
-- Обновлён план улучшений IMPROVEMENTS.md (17 пунктов)
-"@
     $downloadUrl = "https://github.com/Monutor/scanner-overlay/releases/download/v" + $versionName + "/app-release.apk"
-    $releaseNotesEscaped = $releaseNotes -replace '"', '\"'
-    $updateJson = "{"
-    $updateJson = $updateJson + '"versionCode":' + $versionCode + ","
-    $updateJson = $updateJson + '"versionName":"' + $versionName + '",'
-    $updateJson = $updateJson + '"downloadUrl":"' + $downloadUrl + '",'
-    $updateJson = $updateJson + '"releaseNotes":"' + $releaseNotesEscaped + '"'
-    $updateJson = $updateJson + "}"
-    Set-Content -Path "update.json" -Value $updateJson -Encoding UTF8
+    $json = "{`"versionCode`":$versionCode,`"versionName`":`"$versionName`",`"downloadUrl`":`"$downloadUrl`",`"releaseNotes`":`"Release $versionName`"}"
+    $bytes = [System.Text.Encoding]::ASCII.GetBytes($json)
+    [System.IO.File]::WriteAllBytes((Resolve-Path ".").Path + "\update.json", $bytes)
 
     # Git tag and push
     $tag = "v" + $versionName
