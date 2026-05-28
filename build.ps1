@@ -1,5 +1,5 @@
 # Use system JAVA_HOME/ANDROID_HOME if set, otherwise use defaults
-if (-not $env:JAVA_HOME) { $env:JAVA_HOME = "G:\AndoidStudio\jbr" }
+if (-not $env:JAVA_HOME) { $env:JAVA_HOME = "G:\AndroidStudio\jbr" }
 if (-not $env:ANDROID_HOME) { $env:ANDROID_HOME = "G:\AndroidStudioSDK" }
 
 $ADB_PATH = Join-Path $env:ANDROID_HOME "platform-tools\adb.exe"
@@ -45,13 +45,22 @@ switch ($args[0]) {
       exit 1
     }
 
-    # Create update.json
-    $url = "https://github.com/Monutor/scanner-overlay/releases/latest/download/app-release.apk"
+    # Create update.json with release notes
+    $releaseNotes = @"
+**Надёжность:**
+- Retry с экспоненциальной задержкой для проверки обновлений (до 3 попыток)
+- Безопасная очистка AccessibilityNodeInfo через safeRecycle() — больше нет утечек при исключениях
+- Обработка onInterrupt() в AccessibilityService
+
+**Совместимость:**
+- Миграция с deprecated CameraX API
+"@
+    $releaseNotesEscaped = $releaseNotes -replace '"', '\"'
     $updateJson = "{"
     $updateJson = $updateJson + '"versionCode":' + $versionCode + ","
     $updateJson = $updateJson + '"versionName":"' + $versionName + '",'
     $updateJson = $updateJson + '"downloadUrl":"' + $url + '",'
-    $updateJson = $updateJson + '"releaseNotes":""'
+    $updateJson = $updateJson + '"releaseNotes":"' + $releaseNotesEscaped + '"'
     $updateJson = $updateJson + "}"
     Set-Content -Path "update.json" -Value $updateJson -Encoding UTF8
 
