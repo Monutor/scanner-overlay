@@ -63,9 +63,65 @@ override fun onDestroy() {
 
 ---
 
+### 3. Retry сбоев сканирования — scanCompleted не сбрасывается
+**Файлы:** `OverlayActivity.kt`
+
+**Проблема:** `scanCompleted` (AtomicBoolean) устанавливается в `true` при первом сканировании и **никогда не сбрасывается** (строка 723). Кнопка «Повторить» сбрасывает `injectionAttempted`, но не `scanCompleted` — повторное сканирование невозможно.
+
+**Решение:**
+```kotlin
+// В onRetry:
+onRetry = {
+    injectionAttempted = false
+    scanCompleted.set(false)  // добавить эту строку
+    viewModel.resetToScanning()
+}
+```
+
+---
+
 ## 🟡 Средние (надёжность/UX)
 
-### 3. Retry для автообновления с экспоненциальной задержкой
+### 4. scanQuality не применяется к камере
+**Файлы:** `SettingsViewModel.kt`, `OverlayActivity.kt`
+
+**Проблема:** Настройка «Быстро/Стандарт/Максимум» сохраняется в SharedPreferences, но **нигде не читается** при создании `ImageAnalysis`. Камера всегда использует 1280×720.
+
+**Решение:** Прочитать `scan_quality` из prefs и смаппить на разрешение:
+```kotlin
+val quality = prefs.getInt("scan_quality", 1)
+val resolution = when (quality) {
+    0 -> android.util.Size(640, 360)   // Быстро
+    2 -> android.util.Size(1920, 1080) // Максимум
+    else -> android.util.Size(1280, 720) // Стандарт
+}
+
+val imageAnalysis = ImageAnalysis.Builder()
+    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+    .setDefaultResolution(resolution)
+    .build()
+```
+
+---
+
+### 5. Утечка MLKit-клиента и executor при рекомпозиции
+**Файлы:** `OverlayActivity.kt`
+
+**Проблема:** Каждая рекомпозиция `CameraPreview` создаёт новый `BarcodeAnalyzer` с новым MLKit-клиентом и `Executors.newSingleThreadExecutor()`. Старые не закрываются — утечка потоков и памяти.
+
+**Решение:** Добавить cleanup в `DisposableEffect.onDispose`:
+```kotlin
+DisposableEffect(Unit) {
+    onDispose {
+        analyzerExecutor.shutdown()
+        scanner.close()  // BarcodeAnalyzer должен хранить ссылку
+    }
+}
+```
+
+---
+
+### 6. Retry для автообновления с экспоненциальной задержкой
 **Файлы:** `AutoUpdateManager.kt`
 
 **Проблема:** Один запрос — если сервер недоступен, пользователь видит ошибку.
@@ -84,35 +140,23 @@ private suspend fun <T> withRetry(
         } catch (e: Exception) {
             lastError = e
             if (attempt < maxRetries - 1) {
-                delay(delayMs * (2L shl attempt)) // экспоненциальная задержка
+                delay(delayMs * (2L shl attempt))
             }
         }
     }
     return Result.failure(lastError ?: Exception("Unknown error"))
 }
-
-// Использование:
-suspend fun checkForUpdate(): UpdateResult = withContext(Dispatchers.IO) {
-    val result = withRetry(maxRetries = 3, delayMs = 1000L) {
-        // ... текущая логика HTTP-запроса
-    }
-    result.fold(
-        onSuccess = { it },
-        onFailure = { UpdateResult.Error(it.message ?: "Ошибка проверки") }
-    )
-}
 ```
 
 ---
 
-### 4. Сохранение позиции FloatingButton при сворачивании/убийии сервиса
+### 7. Сохранение позиции FloatingButton при сворачивании/убийии сервиса
 **Файлы:** `FloatingScanButton.kt`, `ScannerForegroundService.kt`
 
 **Проблема:** Позиция сохраняется только на `ACTION_UP`. Если сервис убьют во время перетаскивания — позиция потеряется.
 
 **Решение:** Добавить сохранение по таймеру и при изменении атрибутов окна:
 ```kotlin
-// Во FloatingScanButton.init:
 private val positionSaveHandler = Handler(Looper.getMainLooper())
 private var savePositionRunnable: Runnable? = null
 
@@ -124,126 +168,91 @@ private fun schedulePositionSave() {
 
 // В onTouchListener ACTION_MOVE:
 schedulePositionSave()
-
-// Добавить callback в Service:
-override fun onWindowAttributesChanged(config: WindowManager.LayoutParams) {
-    floatingButton?.savePosition()
-}
 ```
 
 ---
 
-### 5. Звуковой сигнал при успешном сканировании (beep)
-**Файлы:** `OverlayActivity.kt`, `OverlayViewModel.kt` или отдельный файл `BeepPlayer.kt`
+### 8. Звуковой сигнал при успешном сканировании (beep)
+**Файлы:** `OverlayActivity.kt` или отдельный файл `BeepPlayer.kt`
 
-**Проблема:** В AGENTS.md упомянут beep, но он не реализован.
+**Проблема:** Вибрация есть, но звукового сигнала нет.
 
-**Решение:** Создать простой плеер через `SoundPool`:
-```kotlin
-// BeepPlayer.kt
-class BeepPlayer @Inject constructor(@ApplicationContext private val context: Context) {
-    private var soundPool: SoundPool? = null
-    private var beepId: Int = 0
-
-    init {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            val builder = SoundPool.Builder()
-                .setMaxStreams(1)
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .build()
-                )
-            soundPool = builder.build { pool ->
-                beepId = pool.load(context, R.raw.beep, 1)
-            }
-        }
-    }
-
-    fun playBeep() {
-        soundPool?.play(beepId, 1f, 1f, 0, 0, 1f)
-    }
-
-    fun release() {
-        soundPool?.release()
-        soundPool = null
-    }
-}
-```
-
-Затем вызвать в `OverlayActivity.onBarcodeScanned()` после вибрации.
+**Решение:** Создать простой плеер через `SoundPool` и вызвать в `onBarcodeScanned()` после вибрации.
 
 ---
 
-### 6. Обработка конфигурационных изменений (поворот экрана)
-**Файлы:** `OverlayActivity.kt`, `OverlayViewModel.kt`
+### 9. Обработка конфигурационных изменений (поворот экрана)
+**Файлы:** `OverlayActivity.kt`
 
 **Проблема:** При повороте экрана создаются дублирующиеся таймеры и обработчики.
 
-**Решение:** Использовать `savedInstanceState` для сохранения состояния:
-```kotlin
-// OverlayActivity.kt
-private val STATE_KEY = "overlay_state"
-
-override fun onCreate(savedInstanceState: Bundle?) {
-    super.onCreate(savedInstanceState)
-    
-    // Сохраняем состояние перед recreation
-    if (savedInstanceState != null) {
-        savedInstanceState.getString(STATE_KEY)?.let { savedState ->
-            // восстановить состояние если нужно
-        }
-    }
-    
-    window.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL)
-    // ...
-}
-
-override fun onSaveInstanceState(out: Bundle) {
-    super.onSaveInstanceState(out)
-    out.putString(STATE_KEY, "active")
-    finishHandler.removeCallbacks(finishRunnable)
-}
-```
+**Решение:** Использовать `savedInstanceState` для сохранения состояния или заблокировать поворот через `android:screenOrientation="portrait"` в манифесте.
 
 ---
 
-## 🟢 Низкий приоритет (чистка/современные API)
+### 10. Избыточное логирование в продакшене
+**Файлы:** `BarcodeAnalyzer.kt`, `ScannerAccessibilityService.kt`
 
-### 7. Миграция с deprecated CameraX API
-**Файлы:** `OverlayActivity.kt` (строка ~564)
+**Проблема:** `Log.d` на каждом кадре (~30 строк/сек) и в большинстве методов AccessibilityService. Засоряет logcat и тратит I/O.
+
+**Решение:** Обернуть в `if (BuildConfig.DEBUG)` или удалить частые логи (особенно `analyze frame` в BarcodeAnalyzer).
+
+---
+
+### 11. Утечка AccessibilityNodeInfo при обходе дерева
+**Файлы:** `ScannerAccessibilityService.kt`
+
+**Проблема:** BFS в `findInputField`, `findSendButton`, `findNodeContaining` добавляет детей в очередь через `getChild()`, но не вызывает `recycle()` для промежуточных узлов. Только узлы в финальном `clearQueue` перерабатываются.
+
+**Решение:** Добавить `safeRecycle()` для каждого узла после проверки и добавления детей в очередь.
+
+---
+
+## 🟢 Низкий приоритет (чистка/UX)
+
+### 12. Мёртвый код — удалить неиспользуемые элементы
+**Файлы:** `ScannerResult.kt`, `ScannerAccessibilityService.kt`, `strings.xml`
+
+**Неиспользуемое:**
+- `ScannerResult.Scanning` — никогда не создаётся
+- `textInjectionCallback` — объявлен, но нигде не подключён
+- `ACTION_INJECT_TEXT` в `onStartCommand` — путь не используется
+- `BarcodeOverlayData` — вычисляется, но UI не рисует
+- Строки в `strings.xml` от старого UI (`sew_package_label`, `scan_sound_label`, `check_permissions`, `service_enabled`, `service_disabled`, `status_service`, `status_sew`, `status_sew_not_found`, `start_service`, `stop_service`)
+
+---
+
+### 13. Захардкоженные значения → настройки
+**Файлы:** `BarcodeAnalyzer.kt`, `OverlayActivity.kt`, `ScannerAccessibilityService.kt`
+
+**Значения, которые стоит вынести:**
+- Префикс `STL` для лукапа (`BarcodeAnalyzer.kt:140`)
+- Задержка инъекции 600ms (`ScannerAccessibilityService.kt:91`)
+- Поиск кнопки «Отправить» 2000ms (`ScannerAccessibilityService.kt:303`)
+- Таймаут NotFound 7с (`OverlayViewModel.kt:69`)
+- Размер превью 300dp (`OverlayActivity.kt:270`)
+
+---
+
+### 14. Миграция с deprecated CameraX API
+**Файлы:** `OverlayActivity.kt`
 
 **Проблема:** `setTargetResolution()` deprecated в CameraX 1.4+.
 
-**Решение:** Заменить на:
-```kotlin
-val imageAnalysis = ImageAnalysis.Builder()
-    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-    .setDefaultResolution(android.util.Size(1280, 720))
-    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-    .build()
-```
+**Решение:** Уже используется `setDefaultResolution()`. Добавить `setOutputImageFormat(OUTPUT_IMAGE_FORMAT_RGBA_8888)`.
 
 ---
 
-### 8. Миграция с deprecated `recycle()` на try-with-resources
-**Файлы:** `ScannerAccessibilityService.kt` (множество мест)
+### 15. safeRecycle extension
+**Файлы:** `ScannerAccessibilityService.kt`
 
 **Проблема:** `AccessibilityNodeInfo.recycle()` deprecated, риск утечки при исключениях.
 
-**Решение:** Создать extension-функцию:
-```kotlin
-private fun AccessibilityNodeInfo.safeRecycle() {
-    try { recycle() } catch (_: Exception) {}
-}
-
-// Заменить все node.recycle() на node.safeRecycle()
-```
+**Решение:** Уже есть `safeRecycle()` extension. Убедиться что он используется везде вместо голого `recycle()`.
 
 ---
 
-### 9. Обработка onInterrupt() в AccessibilityService
+### 16. Обработка onInterrupt() в AccessibilityService
 **Файлы:** `ScannerAccessibilityService.kt`
 
 **Проблема:** Метод пустой, сервис может терять контекст при переключении приложений.
@@ -251,10 +260,19 @@ private fun AccessibilityNodeInfo.safeRecycle() {
 **Решение:** Добавить логирование и сброс состояния:
 ```kotlin
 override fun onInterrupt() {
-    android.util.Log.w("ScannerAccessibility", "Service interrupted")
+    Log.w("ScannerAccessibility", "Service interrupted")
     mainHandler.removeCallbacksAndMessages(null)
 }
 ```
+
+---
+
+### 17. BarcodeOverlayData — либо использовать, либо удалить
+**Файлы:** `BarcodeAnalyzer.kt`, `ScannerResult.kt`
+
+**Проблема:** `BarcodeOverlayData` вычисляется из bounding box и передаётся в `ScannerResult.Success`, но UI его не рисует.
+
+**Решение:** Удалить как мёртвый код, или реализовать отрисовку рамки вокруг распознанного штрихкода.
 
 ---
 
@@ -264,10 +282,18 @@ override fun onInterrupt() {
 |---|----------|-----------|---------|
 | 1 | Вынести ключи из gradle | Низкая | 🔴 Высокое (безопасность) |
 | 2 | WeakReference для instance | Низкая | 🟡 Среднее (стабильность) |
-| 3 | Retry для автообновления | Средняя | 🟡 Среднее (надёжность) |
-| 4 | Сохранение позиции кнопки | Средняя | 🟡 Среднее (UX) |
-| 5 | Звуковой сигнал beep | Низкая | 🟢 Низкое (UX) |
-| 6 | Обработка поворота экрана | Средняя | 🟡 Среднее (стабильность) |
-| 7 | Миграция CameraX API | Низкая | 🟢 Низкое (чистка) |
-| 8 | safeRecycle extension | Низкая | 🟢 Низкое (чистка) |
-| 9 | Обработка onInterrupt() | Низкая | 🟢 Низкое (стабильность) |
+| 3 | scanCompleted не сбрасывается — retry сломан | Низкая | 🔴 Высокое (баг) |
+| 4 | scanQuality не применяется к камере | Низкая | 🔴 Высокое (баг) |
+| 5 | Утечка MLKit-клиента/executor | Средняя | 🔴 Высокое (память) |
+| 6 | Retry для автообновления | Средняя | 🟡 Среднее (надёжность) |
+| 7 | Сохранение позиции кнопки | Средняя | 🟡 Среднее (UX) |
+| 8 | Звуковой сигнал beep | Низкая | 🟢 Низкое (UX) |
+| 9 | Обработка поворота экрана | Средняя | 🟡 Среднее (стабильность) |
+| 10 | Избыточное логирование | Низкая | 🟡 Среднее (производительность) |
+| 11 | Утечка NodeInfo при обходе дерева | Средняя | 🟡 Среднее (стабильность) |
+| 12 | Удалить мёртвый код | Низкая | 🟢 Низкое (чистка) |
+| 13 | Захардкоженные значения → настройки | Средняя | 🟢 Низкое (UX) |
+| 14 | Миграция CameraX API | Низкая | 🟢 Низкое (чистка) |
+| 15 | safeRecycle extension | Низкая | 🟢 Низкое (чистка) |
+| 16 | Обработка onInterrupt() | Низкая | 🟢 Низкое (стабильность) |
+| 17 | BarcodeOverlayData — использовать или удалить | Низкая | 🟢 Низкое (чистка) |

@@ -48,20 +48,13 @@ switch ($args[0]) {
     # Create update.json with release notes
     $releaseNotes = @"
 **Исправлено:**
-- Сканер не распознавал штрихкоды: imageProxy закрывался до завершения обработки MLKit
-- Несовместимый формат RGBA_8888 — MLKit требует YUV_420_888
-- Слишком строгий фильтр центральной области — штрихкоды отвергались при наведении
-- Утечка Executor на каждый кадр — обёрнут в remember
-- Гонка флага scanCompleted
-- Хрупкая проверка clipboard в AccessibilityService
-- resolveActivity возвращает null на Android 11+
-- Разрешения не обновлялись при возврате в приложение
-- savePosition() вызывался на каждом MOVE
+- Сканер неверно выбирал штрихкод на полке: центр кадра пересчитан с учётом поворота камеры
+- Двойная инъекция текста: наложение finishRunnable и onBarcodeScanned приводило к битому тексту
+- Задержка закрытия оверлея 7с для товаров уменьшена до 3с (как для полок)
 
 **Улучшено:**
-- Задержка 1.5с перед началом сканирования для центровки штрихкода
-- Удалён мёртвый метод start() в ForegroundService
-- Частичный APK очищается при ошибке скачивания
+- Штрихкоды товаров (не начинающиеся на STL) пропускают проверку по базе — быстрее и без ложных "не найдено"
+- Обновлён план улучшений IMPROVEMENTS.md (17 пунктов)
 "@
     $downloadUrl = "https://github.com/Monutor/scanner-overlay/releases/download/v" + $versionName + "/app-release.apk"
     $releaseNotesEscaped = $releaseNotes -replace '"', '\"'

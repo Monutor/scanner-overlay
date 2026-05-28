@@ -13,7 +13,8 @@ sealed interface ScannerResult {
     data class Success(
         val barcode: String,
         val format: Int,
-        val overlayData: BarcodeOverlayData? = null
+        val overlayData: BarcodeOverlayData? = null,
+        val lookupResult: BarcodeLookupResult? = null
     ) : ScannerResult
     data class Error(val message: String) : ScannerResult
     data object Scanning : ScannerResult

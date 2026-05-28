@@ -10,7 +10,7 @@ import com.google.mlkit.vision.common.InputImage
 import androidx.compose.ui.geometry.Rect
 
 class BarcodeAnalyzer(
-    private val scanRegionWidthFraction: Float = 0.80f,
+    private val maxCenterDistanceFraction: Float = 0.18f,
     private val cooldownMs: Long = 2000L,
     private val startupDelayMs: Long = 1500L,
     private val onResult: (ScannerResult) -> Unit
@@ -66,34 +66,36 @@ class BarcodeAnalyzer(
                 .addOnSuccessListener { barcodes ->
                     android.util.Log.d("BarcodeAnalyzer", "MLKit detected ${barcodes.size} barcode(s)")
                     if (barcodes.isNotEmpty()) {
-                        val regionW = (imgW * scanRegionWidthFraction).toInt()
-                        val centerXImg = imgW / 2f
-                        val centerYImg = imgH / 2f
-                        val verticalMargin = imgH * 0.15f
+                        val isRotated = rotation == 90 || rotation == 270
+                        val rotW = (if (isRotated) imgH else imgW).toFloat()
+                        val rotH = (if (isRotated) imgW else imgH).toFloat()
+                        val centerImgX = rotW / 2f
+                        val centerImgY = rotH / 2f
 
-                        for ((i, barcode) in barcodes.withIndex()) {
-                            val box = barcode.boundingBox
-                            android.util.Log.d("BarcodeAnalyzer", "  barcode[$i] format=${barcode.format} value=${barcode.rawValue} center=(${box?.centerX()},${box?.centerY()}) bounds=(${box?.left},${box?.top},${box?.right},${box?.bottom})")
+                        val maxDist = Math.hypot(rotW.toDouble(), rotH.toDouble()) * maxCenterDistanceFraction
+
+                        // Filter out barcodes with no bounding box
+                        val validBarcodes = barcodes.filterNotNull().filter { it.boundingBox != null }
+
+                        if (validBarcodes.isEmpty()) {
+                            android.util.Log.w("BarcodeAnalyzer", "No barcodes with boundingBox")
+                            return@addOnSuccessListener
                         }
 
-                        val centerBarcode = barcodes.firstOrNull { barcode ->
-                            val box = barcode.boundingBox ?: run {
-                                android.util.Log.d("BarcodeAnalyzer", "  rejected: no boundingBox")
-                                return@firstOrNull false
-                            }
+                        // Pick the barcode closest to image center, but reject if too far
+                        val centerBarcode = validBarcodes.minByOrNull { barcode ->
+                            val box = barcode.boundingBox!!
                             val cx = box.centerX().toFloat()
                             val cy = box.centerY().toFloat()
-                            val leftEdge = (imgW - regionW) / 2f
-                            val rightEdge = leftEdge + regionW
-                            val horizontallyCentered = cx in leftEdge..rightEdge
-                            val verticallyClose = cy in (centerYImg - verticalMargin)..(centerYImg + verticalMargin)
-                            if (!horizontallyCentered) android.util.Log.d("BarcodeAnalyzer", "  rejected: not horizontally centered, cx=$cx range=[$leftEdge..$rightEdge]")
-                            if (!verticallyClose) android.util.Log.d("BarcodeAnalyzer", "  rejected: not vertically close, cy=$cy range=[${centerYImg - verticalMargin}..${centerYImg + verticalMargin}]")
-                            horizontallyCentered && verticallyClose
+                            Math.hypot(cx.toDouble() - centerImgX.toDouble(), cy.toDouble() - centerImgY.toDouble())
                         }
 
-                        if (centerBarcode == null) {
-                            android.util.Log.w("BarcodeAnalyzer", "No barcode in center region, skipping all ${barcodes.size} detected")
+                        val dist = Math.hypot(
+                            (centerBarcode!!.boundingBox!!.centerX().toFloat() - centerImgX).toDouble(),
+                            (centerBarcode.boundingBox!!.centerY().toFloat() - centerImgY).toDouble()
+                        )
+                        if (dist > maxDist) {
+                            android.util.Log.d("BarcodeAnalyzer", "rejected too far from center: dist=$dist max=$maxDist (${centerBarcode.rawValue})")
                             return@addOnSuccessListener
                         }
 
@@ -122,7 +124,7 @@ class BarcodeAnalyzer(
                         addScannedCode(value)
                         lastScannedCode = value
                         lastScanTime = now
-                        android.util.Log.d("BarcodeAnalyzer", "SUCCESS: $value format=${centerBarcode.format}")
+                        android.util.Log.d("BarcodeAnalyzer", "SUCCESS (dist=$dist/$maxDist): $value format=${centerBarcode.format}")
 
                         val overlayData = centerBarcode.boundingBox?.let { box ->
                             BarcodeOverlayData(
@@ -135,7 +137,9 @@ class BarcodeAnalyzer(
                                 imageRotation = rotation
                             )
                         }
-                        onResult(ScannerResult.Success(value, centerBarcode.format, overlayData))
+                        val lookupResult = if (value.startsWith("STL")) BarcodeDatabase.lookup(value) else null
+                        android.util.Log.d("BarcodeAnalyzer", "lookup result: $lookupResult")
+                        onResult(ScannerResult.Success(value, centerBarcode.format, overlayData, lookupResult))
                     }
                 }
                 .addOnFailureListener { e ->
