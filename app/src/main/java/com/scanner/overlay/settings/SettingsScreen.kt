@@ -30,6 +30,7 @@ fun SettingsScreen(
 ) {
     val isFloatingButtonEnabled by viewModel.isFloatingButtonEnabled.collectAsState()
     val scanTimeoutMs by viewModel.scanTimeoutMs.collectAsState()
+    val scanQuality by viewModel.scanQuality.collectAsState()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -79,6 +80,11 @@ fun SettingsScreen(
             TimeoutCard(
                 timeoutMs = scanTimeoutMs,
                 onTimeoutChange = { viewModel.updateScanTimeout(it) }
+            )
+
+            QualityCard(
+                quality = scanQuality,
+                onQualityChange = { viewModel.updateScanQuality(it) }
             )
 
             PermissionsCard(
@@ -195,6 +201,69 @@ private fun TimeoutCard(
                             text = { Text(text) },
                             onClick = {
                                 onTimeoutChange(ms)
+                                expanded = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun QualityCard(
+    quality: Int,
+    onQualityChange: (Int) -> Unit
+) {
+    val options = listOf(
+        0 to "Быстро",
+        1 to "Стандарт",
+        2 to "Максимум"
+    )
+    var expanded by remember { mutableStateOf(false) }
+    val label = options.find { it.first == quality }?.second
+        ?: "Стандарт"
+
+    Card {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                "Качество сканирования",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Разрешение камеры",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+
+            ExposedDropdownMenuBox(
+                expanded = expanded,
+                onExpandedChange = { expanded = !expanded }
+            ) {
+                OutlinedTextField(
+                    value = label,
+                    onValueChange = {},
+                    readOnly = true,
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor(),
+                    singleLine = true
+                )
+
+                ExposedDropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false }
+                ) {
+                    options.forEach { (q, text) ->
+                        DropdownMenuItem(
+                            text = { Text(text) },
+                            onClick = {
+                                onQualityChange(q)
                                 expanded = false
                             }
                         )

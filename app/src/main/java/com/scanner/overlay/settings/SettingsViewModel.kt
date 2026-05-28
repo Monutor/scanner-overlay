@@ -37,12 +37,17 @@ class SettingsViewModel @Inject constructor(
     companion object {
         private const val PREF_KEY_SERVICE_RUNNING = "service_running"
         private const val PREF_KEY_SCAN_TIMEOUT = "scan_timeout_ms"
+        private const val PREF_KEY_SCAN_QUALITY = "scan_quality"
     }
 
     private val _isFloatingButtonEnabled = MutableStateFlow(false)
 
     private val _scanTimeoutMs = MutableStateFlow(prefs.getLong(PREF_KEY_SCAN_TIMEOUT, 45_000L))
     val scanTimeoutMs: StateFlow<Long> = _scanTimeoutMs.asStateFlow()
+
+    private val _scanQuality = MutableStateFlow(prefs.getInt(PREF_KEY_SCAN_QUALITY, 1))
+    val scanQuality: StateFlow<Int> = _scanQuality.asStateFlow()
+
     val isFloatingButtonEnabled: StateFlow<Boolean> = _isFloatingButtonEnabled.asStateFlow()
 
     private val _updateState = MutableStateFlow<UpdateUiState>(UpdateUiState.Idle)
@@ -88,6 +93,12 @@ class SettingsViewModel @Inject constructor(
     fun updateScanTimeout(ms: Long) {
         _scanTimeoutMs.value = ms
         prefs.edit().putLong(PREF_KEY_SCAN_TIMEOUT, ms).apply()
+    }
+
+    fun updateScanQuality(quality: Int) {
+        require(quality in 0..2) { "Quality must be 0, 1, or 2" }
+        _scanQuality.value = quality
+        prefs.edit().putInt(PREF_KEY_SCAN_QUALITY, quality).apply()
     }
 
     fun openAccessibilitySettings() {

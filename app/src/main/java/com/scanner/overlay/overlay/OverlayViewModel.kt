@@ -48,6 +48,18 @@ class OverlayViewModel @Inject constructor(
         _state.value = OverlayState.Error
     }
 
+    fun resetToScanning() {
+        timeoutJob.cancel()
+        _isScanTimedOut.value = false
+        _state.value = OverlayState.Scanning
+        val timeoutMs = prefs.getLong("scan_timeout_ms", 45_000L)
+        timeoutJob = viewModelScope.launch {
+            delay(timeoutMs)
+            _isScanTimedOut.value = true
+            _state.value = OverlayState.Error
+        }
+    }
+
     sealed interface OverlayState {
         data object Scanning : OverlayState
         data class Success(val barcode: String) : OverlayState

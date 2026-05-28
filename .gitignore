@@ -22,3 +22,13 @@ out/
 *.svg
 release.keystore
 update.json
+
+# Build artifacts (all levels)
+**/build/
+**/*.class
+**/*.dex
+**/kotlin/**
+**/kspCaches/
+**/.kotlin/
+**/databinding/*.xml
+**/generated/

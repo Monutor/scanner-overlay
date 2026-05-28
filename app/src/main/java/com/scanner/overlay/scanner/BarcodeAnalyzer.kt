@@ -10,13 +10,10 @@ import com.google.mlkit.vision.common.InputImage
 import androidx.compose.ui.geometry.Rect
 
 class BarcodeAnalyzer(
-    private val startupDelayMs: Long = 600L,
-    private val scanRegionWidthFraction: Float = 0.60f,
+    private val scanRegionWidthFraction: Float = 0.80f,
     private val cooldownMs: Long = 2000L,
     private val onResult: (ScannerResult) -> Unit
 ) : ImageAnalysis.Analyzer {
-
-    private val startTime = System.currentTimeMillis()
     private val scanner = BarcodeScanning.getClient(
         BarcodeScannerOptions.Builder()
             .setBarcodeFormats(
@@ -45,11 +42,6 @@ class BarcodeAnalyzer(
         val mediaImage = imageProxy.image
         if (mediaImage == null) {
             onResult(ScannerResult.Error("No image from camera"))
-            imageProxy.close()
-            return
-        }
-
-        if (System.currentTimeMillis() - startTime < startupDelayMs) {
             imageProxy.close()
             return
         }
