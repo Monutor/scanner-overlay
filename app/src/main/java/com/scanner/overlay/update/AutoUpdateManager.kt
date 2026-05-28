@@ -125,13 +125,14 @@ object AutoUpdateManager {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
 
-            if (intent.resolveActivity(context.packageManager) != null) {
+            try {
                 context.startActivity(intent)
                 Result.success(Unit)
-            } else {
+            } catch (e: Exception) {
                 Result.failure(Exception("Не найден установщик APK"))
             }
         } catch (e: Exception) {
+            file?.delete()
             Result.failure(e)
         } finally {
             conn.disconnect()

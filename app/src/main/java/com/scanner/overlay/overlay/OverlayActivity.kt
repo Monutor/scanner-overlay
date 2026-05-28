@@ -229,34 +229,34 @@ fun OverlayContent(
                     .border(1.dp, Color(0x1AFFFFFF), RoundedCornerShape(16.dp))
             ) {
                 CameraPreview(
-                torchOn = torchOn,
-                onBarcodeScanned = { result ->
-                    try {
-                        if (showManualInput) {
-                            manualInput = result.barcode
-                        } else {
-                            coroutineScope.launch {
-                                try {
-                                    detectedBarcode = true
-                                    delay(800)
-                                    viewModel.onBarcodeDetected(result)
-                                    onBarcodeScanned(result.barcode)
-                                } catch (e: Exception) {
-                                    android.util.Log.e("ScanFlow", "launch crash", e)
+                    torchOn = torchOn,
+                    onBarcodeScanned = { result ->
+                        try {
+                            if (showManualInput) {
+                                manualInput = result.barcode
+                            } else {
+                                coroutineScope.launch {
+                                    try {
+                                        detectedBarcode = true
+                                        delay(800)
+                                        viewModel.onBarcodeDetected(result)
+                                        onBarcodeScanned(result.barcode)
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("ScanFlow", "launch crash", e)
+                                    }
                                 }
                             }
+                        } catch (e: Exception) {
+                            android.util.Log.e("ScanFlow", "outer crash", e)
                         }
-                    } catch (e: Exception) {
-                        android.util.Log.e("ScanFlow", "outer crash", e)
-                    }
-                },
-                onShowManualInput = { barcode ->
-                    showManualInput = true
-                    manualInput = barcode
-                },
-                onCancelFinish = onCancelFinish,
-                modifier = Modifier.fillMaxSize()
-            )
+                    },
+                    onShowManualInput = { barcode ->
+                        showManualInput = true
+                        manualInput = barcode
+                    },
+                    onCancelFinish = onCancelFinish,
+                    modifier = Modifier.fillMaxSize()
+                )
 
                 // Green highlight box (centered, on detection)
                 if (detectedBarcode) {
@@ -557,9 +557,10 @@ fun CameraPreview(
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
 
     val cameraControl = remember { mutableStateOf<CameraControl?>(null) }
-    var scanCompleted = AtomicBoolean(false)
+    val scanCompleted = remember { AtomicBoolean(false) }
     val currentOnShowManualInput = rememberUpdatedState(onShowManualInput)
     val cameraProviderRef = remember { mutableStateOf<ProcessCameraProvider?>(null) }
+    val analyzerExecutor = remember { java.util.concurrent.Executors.newSingleThreadExecutor() }
 
     LaunchedEffect(torchOn, cameraControl.value) {
         try {
@@ -598,10 +599,9 @@ fun CameraPreview(
                 val imageAnalysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .setDefaultResolution(android.util.Size(1280, 720))
-                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                     .build()
                 imageAnalysis.setAnalyzer(
-                    java.util.concurrent.Executors.newSingleThreadExecutor(),
+                    analyzerExecutor,
                     BarcodeAnalyzer(
                         onResult = { result ->
                             android.os.Handler(android.os.Looper.getMainLooper()).post {

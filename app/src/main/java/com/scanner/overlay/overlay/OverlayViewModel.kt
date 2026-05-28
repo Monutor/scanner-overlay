@@ -26,20 +26,19 @@ class OverlayViewModel @Inject constructor(
     private val _isScanTimedOut = MutableStateFlow(false)
     val isScanTimedOut: StateFlow<Boolean> = _isScanTimedOut.asStateFlow()
 
-    private var timeoutJob = viewModelScope.launch {
-        val timeoutMs = prefs.getLong("scan_timeout_ms", 45_000L)
-        delay(timeoutMs)
-        _isScanTimedOut.value = true
-        _state.value = OverlayState.Error
+    private var timeoutJob: kotlinx.coroutines.Job? = null
+
+    init {
+        startTimeout()
     }
 
     override fun onCleared() {
         super.onCleared()
-        timeoutJob.cancel()
+        timeoutJob?.cancel()
     }
 
     fun onBarcodeDetected(result: ScannerResult.Success) {
-        timeoutJob.cancel()
+        timeoutJob?.cancel()
         _barcode.value = result.barcode
         _state.value = OverlayState.Success(result.barcode)
     }
@@ -49,9 +48,14 @@ class OverlayViewModel @Inject constructor(
     }
 
     fun resetToScanning() {
-        timeoutJob.cancel()
+        timeoutJob?.cancel()
         _isScanTimedOut.value = false
         _state.value = OverlayState.Scanning
+        startTimeout()
+    }
+
+    private fun startTimeout() {
+        timeoutJob?.cancel()
         val timeoutMs = prefs.getLong("scan_timeout_ms", 45_000L)
         timeoutJob = viewModelScope.launch {
             delay(timeoutMs)

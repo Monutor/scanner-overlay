@@ -21,6 +21,7 @@ class ScannerAccessibilityService : AccessibilityService() {
 
     private var textInjectionCallback: TextInjectionCallback? = null
     private var pendingClipboardRestore: ClipData? = null
+    private var lastInjectedText: String? = null
 
     interface TextInjectionCallback {
         fun onTextInjected(success: Boolean)
@@ -36,7 +37,8 @@ class ScannerAccessibilityService : AccessibilityService() {
         instance = null
         pendingClipboardRestore?.let { original ->
             val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-            if (clipboard.primaryClip?.toString()?.contains("barcode", ignoreCase = true) == true) {
+            val currentClip = clipboard.primaryClip
+            if (currentClip != null && currentClip.getItemAt(0)?.text?.toString() == lastInjectedText) {
                 clipboard.setPrimaryClip(original)
             }
         }
@@ -204,6 +206,7 @@ class ScannerAccessibilityService : AccessibilityService() {
     }
 
     private fun setText(node: AccessibilityNodeInfo, text: String) {
+        lastInjectedText = text
         val args = Bundle().apply {
             putCharSequence(
                 AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,

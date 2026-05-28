@@ -67,12 +67,13 @@ class ScannerForegroundService : Service() {
                 floatingButton.show()
             }
             ACTION_STOP -> stopSelf()
+            null -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.canDrawOverlays(this)) {
+                    floatingButton.show()
+                }
+            }
         }
         return START_STICKY
-    }
-
-    private fun start() {
-        floatingButton.show()
     }
 
     private fun createNotification(): Notification {

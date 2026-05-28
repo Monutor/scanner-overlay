@@ -120,7 +120,6 @@ class FloatingScanButton(
                     try {
                         windowManager.updateViewLayout(button, params)
                     } catch (_: Exception) {}
-                    savePosition()
                 }
                 true
             }

@@ -34,22 +34,30 @@ fun SettingsScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
+    var cameraGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    var overlayGranted by remember {
+        mutableStateOf(android.provider.Settings.canDrawOverlays(context))
+    }
+    var accessibilityGranted by remember {
+        mutableStateOf(viewModel.isAccessibilityServiceEnabled())
+    }
+
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 viewModel.refreshServiceState()
+                cameraGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+                overlayGranted = android.provider.Settings.canDrawOverlays(context)
+                accessibilityGranted = viewModel.isAccessibilityServiceEnabled()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-
-    val cameraGranted = ContextCompat.checkSelfPermission(
-        context, Manifest.permission.CAMERA
-    ) == PackageManager.PERMISSION_GRANTED
-
-    val overlayGranted = android.provider.Settings.canDrawOverlays(context)
-    val accessibilityGranted = viewModel.isAccessibilityServiceEnabled()
 
     val updateState by viewModel.updateState.collectAsState()
     val currentVersion = viewModel.currentVersion

@@ -47,19 +47,28 @@ switch ($args[0]) {
 
     # Create update.json with release notes
     $releaseNotes = @"
-**Надёжность:**
-- Retry с экспоненциальной задержкой для проверки обновлений (до 3 попыток)
-- Безопасная очистка AccessibilityNodeInfo через safeRecycle() — больше нет утечек при исключениях
-- Обработка onInterrupt() в AccessibilityService
+**Исправлено:**
+- Сканер не распознавал штрихкоды: imageProxy закрывался до завершения обработки MLKit
+- Несовместимый формат RGBA_8888 — MLKit требует YUV_420_888
+- Слишком строгий фильтр центральной области — штрихкоды отвергались при наведении
+- Утечка Executor на каждый кадр — обёрнут в remember
+- Гонка флага scanCompleted
+- Хрупкая проверка clipboard в AccessibilityService
+- resolveActivity возвращает null на Android 11+
+- Разрешения не обновлялись при возврате в приложение
+- savePosition() вызывался на каждом MOVE
 
-**Совместимость:**
-- Миграция с deprecated CameraX API
+**Улучшено:**
+- Задержка 1.5с перед началом сканирования для центровки штрихкода
+- Удалён мёртвый метод start() в ForegroundService
+- Частичный APK очищается при ошибке скачивания
 "@
+    $downloadUrl = "https://github.com/Monutor/scanner-overlay/releases/download/v" + $versionName + "/app-release.apk"
     $releaseNotesEscaped = $releaseNotes -replace '"', '\"'
     $updateJson = "{"
     $updateJson = $updateJson + '"versionCode":' + $versionCode + ","
     $updateJson = $updateJson + '"versionName":"' + $versionName + '",'
-    $updateJson = $updateJson + '"downloadUrl":"' + $url + '",'
+    $updateJson = $updateJson + '"downloadUrl":"' + $downloadUrl + '",'
     $updateJson = $updateJson + '"releaseNotes":"' + $releaseNotesEscaped + '"'
     $updateJson = $updateJson + "}"
     Set-Content -Path "update.json" -Value $updateJson -Encoding UTF8
