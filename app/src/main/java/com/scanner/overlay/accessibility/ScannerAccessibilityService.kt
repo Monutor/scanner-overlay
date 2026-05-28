@@ -12,6 +12,10 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import dagger.hilt.android.AndroidEntryPoint
 
+private fun AccessibilityNodeInfo.safeRecycle() {
+    try { recycle() } catch (_: Exception) {}
+}
+
 @AndroidEntryPoint
 class ScannerAccessibilityService : AccessibilityService() {
 
@@ -41,7 +45,10 @@ class ScannerAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
 
-    override fun onInterrupt() {}
+    override fun onInterrupt() {
+        android.util.Log.w("ScannerAccessibility", "Service interrupted")
+        mainHandler.removeCallbacksAndMessages(null)
+    }
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -96,7 +103,7 @@ class ScannerAccessibilityService : AccessibilityService() {
                 return it
             }
             android.util.Log.d("ScannerAccessibility", "findFocus not editable (editable=${it.isEditable}, focused=${it.isFocused}), falling through to window scan")
-            it.recycle()
+            it.safeRecycle()
         }
         for ((i, win) in windows.withIndex()) {
             val root = win.root ?: continue
@@ -191,7 +198,7 @@ class ScannerAccessibilityService : AccessibilityService() {
     private fun clearQueue(queue: java.util.ArrayDeque<AccessibilityNodeInfo>) {
         var node: AccessibilityNodeInfo? = queue.poll()
         while (node != null) {
-            node.recycle()
+            node.safeRecycle()
             node = queue.poll()
         }
     }
@@ -208,7 +215,7 @@ class ScannerAccessibilityService : AccessibilityService() {
             val textToSend = text
             mainHandler.postDelayed({
                 pressEnter(node)
-                node.recycle()
+                node.safeRecycle()
                 textInjectionCallback?.onTextInjected(true)
                 mainHandler.postDelayed({
                     findAndClickSendButton(2000, textToSend)
@@ -225,7 +232,7 @@ class ScannerAccessibilityService : AccessibilityService() {
         node.refresh()
         node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-        node.recycle()
+        node.safeRecycle()
 
         mainHandler.postDelayed({
             pasteFromContextMenu()
@@ -234,7 +241,7 @@ class ScannerAccessibilityService : AccessibilityService() {
                 val pastedField = findFocusedOrEditable()
                 if (pastedField != null) {
                     pressEnter(pastedField)
-                    pastedField.recycle()
+                    pastedField.safeRecycle()
                 }
                 pendingClipboardRestore = null
                 original?.let { clipboard.setPrimaryClip(it) }
@@ -267,7 +274,7 @@ class ScannerAccessibilityService : AccessibilityService() {
         if (focused != null) {
             focused.refresh()
             focused.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
-            focused.recycle()
+            focused.safeRecycle()
         }
         mainHandler.postDelayed({
             findAndClickPaste()
@@ -282,10 +289,10 @@ class ScannerAccessibilityService : AccessibilityService() {
                 val node = findNodeContaining(root, text)
                 if (node != null && node.isClickable) {
                     node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                    node.recycle()
+                    node.safeRecycle()
                     return
                 }
-                node?.recycle()
+                node?.safeRecycle()
             }
         }
     }
@@ -296,17 +303,17 @@ class ScannerAccessibilityService : AccessibilityService() {
             val focusedNode = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
             if (focusedNode != null) {
                 val text = focusedNode.text?.toString() ?: ""
-                focusedNode.recycle()
+                focusedNode.safeRecycle()
                 if (text.contains(barcode)) {
                     for (win in windows) {
                         val root = win.root ?: continue
                         val sendBtn = findSendButton(root, targets)
                         if (sendBtn != null && sendBtn.isClickable) {
                             sendBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                            sendBtn.recycle()
+                            sendBtn.safeRecycle()
                             return@postDelayed
                         }
-                        sendBtn?.recycle()
+                        sendBtn?.safeRecycle()
                     }
                 }
             }

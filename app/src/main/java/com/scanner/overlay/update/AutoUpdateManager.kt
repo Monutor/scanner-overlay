@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.core.content.FileProvider
 import com.scanner.overlay.BuildConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -29,42 +30,63 @@ object AutoUpdateManager {
     private const val UPDATE_JSON_URL =
         "https://github.com/Monutor/scanner-overlay/releases/latest/download/update.json"
 
-    suspend fun checkForUpdate(): UpdateResult = withContext(Dispatchers.IO) {
-        val conn = try {
-            URL(UPDATE_JSON_URL).openConnection() as HttpURLConnection
-        } catch (e: Exception) {
-            return@withContext UpdateResult.Error(e.message ?: "Ошибка подключения")
+    private suspend fun <T> withRetry(
+        maxRetries: Int = 3,
+        delayMs: Long = 1000L,
+        block: suspend () -> T
+    ): Result<T> {
+        var lastError: Exception? = null
+        repeat(maxRetries) { attempt ->
+            try {
+                return Result.success(block())
+            } catch (e: Exception) {
+                lastError = e
+                if (attempt < maxRetries - 1) {
+                    delay(delayMs * (2L shl attempt))
+                }
+            }
         }
-        var responseCode = -1
+        return Result.failure(lastError ?: Exception("Unknown error"))
+    }
+
+    private suspend fun fetchUpdateInfo(): UpdateInfo {
+        val conn = URL(UPDATE_JSON_URL).openConnection() as HttpURLConnection
         try {
             conn.connectTimeout = 10_000
             conn.readTimeout = 15_000
 
-            responseCode = conn.responseCode
-            if (responseCode != HttpURLConnection.HTTP_OK) {
-                return@withContext UpdateResult.Error("HTTP $responseCode")
+            if (conn.responseCode != HttpURLConnection.HTTP_OK) {
+                throw Exception("HTTP ${conn.responseCode}")
             }
 
             val json = conn.inputStream.bufferedReader().readText()
             val obj = JSONObject(json)
 
-            val info = UpdateInfo(
+            return UpdateInfo(
                 versionCode = obj.getInt("versionCode"),
                 versionName = obj.getString("versionName"),
                 downloadUrl = obj.getString("downloadUrl"),
                 releaseNotes = obj.optString("releaseNotes", "")
             )
-
-            if (info.versionCode > BuildConfig.VERSION_CODE) {
-                UpdateResult.Available(info)
-            } else {
-                UpdateResult.UpToDate
-            }
-        } catch (e: Exception) {
-            UpdateResult.Error(e.message ?: "Ошибка проверки")
         } finally {
             conn.disconnect()
         }
+    }
+
+    suspend fun checkForUpdate(): UpdateResult = withContext(Dispatchers.IO) {
+        val result = withRetry(maxRetries = 3, delayMs = 1000L) {
+            fetchUpdateInfo()
+        }
+        result.fold(
+            onSuccess = { info ->
+                if (info.versionCode > BuildConfig.VERSION_CODE) {
+                    UpdateResult.Available(info)
+                } else {
+                    UpdateResult.UpToDate
+                }
+            },
+            onFailure = { UpdateResult.Error(it.message ?: "Ошибка проверки") }
+        )
     }
 
     suspend fun downloadAndInstall(context: Context, info: UpdateInfo): Result<Unit> = withContext(Dispatchers.IO) {

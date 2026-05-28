@@ -4,10 +4,11 @@ Android-приложение для сканирования штрихкодо�
 
 ## Tech stack
 
-- Kotlin 2.0.0, Jetpack Compose + Material3, Hilt 2.51.1
-- CameraX 1.3.4, MLKit Barcode Scanning 17.2.0
+- Kotlin 2.0.21, Jetpack Compose + Material3 (BOM 2024.12.01), Hilt 2.52
+- CameraX 1.4.1, MLKit Barcode Scanning 17.3.0, Coroutines 1.9.0
 - compileSdk/targetSdk = 36, minSdk = 26, Java 17
-- Gradle 8.7, AGP 8.5.0, version catalog (`gradle/libs.versions.toml`)
+- Gradle 8.7 (wrapper), AGP 8.5.2, KSP (не KAPT!) для Hilt
+- Version catalog: `gradle/libs.versions.toml`
 
 ## Dev commands (PowerShell — `build.ps1`)
 
@@ -17,8 +18,12 @@ Android-приложение для сканирования штрихкодо�
 | `build.ps1 apk` | `./gradlew assembleDebug` |
 | `build.ps1 run` | Запускает MainActivity через adb |
 | `build.ps1 uninstall` | adb uninstall com.scanner.overlay |
+| `build.ps1 release` | Собирает signed APK, создаёт git-тег и GitHub Release (нужен gh CLI) |
+| `build.ps1 install-release` | Собирает release APK и ставит на устройство |
 
-`JAVA_HOME` и `ANDROID_HOME` задаются в `build.ps1` — не через system env.
+`JAVA_HOME` и `ANDROID_HOME` задаются в `build.ps1` по умолчанию (`G:\AndroidStudio\jbr`, `G:\AndroidStudioSDK`). Переопределяются через env.
+
+Альтернатива: `build-and-install.bat` — uninstall + build + install (Windows batch).
 
 ## Architecture
 
@@ -32,10 +37,25 @@ OverlayViewModel          — состояние Scanning/Success/Error, тай�
 BarcodeAnalyzer           — MLKit, 600ms startup delay, центр кадра (75% crop)
 ScannerAccessibilityService — ввод текста в focused/editable поле
 ScannerForegroundService  — persistent уведомление для быстрого запуска оверлея
+FloatingScanButton        — WindowManager overlay-кнопка для быстрого запуска сканера
+AutoUpdateManager         — автообновление из GitHub Releases (update.json URL)
 AppModule                 — SharedPreferences ("scanner_prefs")
+ScannerApp                — Application + @HiltAndroidApp
 ```
 
-## Key classes
+## Package structure
+
+| Package | Contents |
+|---|---|
+| `MainActivity`, `settings.*` | UI: лаунчер, настройки |
+| `overlay.*` | OverlayActivity + ViewModel (камера, сканирование) |
+| `scanner.*` | BarcodeAnalyzer, ScannerResult sealed interface |
+| `accessibility.*` | ScannerAccessibilityService |
+| `service.*` | ScannerForegroundService, FloatingScanButton |
+| `update.*` | AutoUpdateManager |
+| `di.*` | Hilt modules (AppModule) |
+
+## Key types
 
 - `ScannerResult` — sealed interface: `Success(barcode, format)`, `Error(msg)`, `Scanning`
 - `OverlayState` — sealed interface: `Scanning`, `Success(barcode)`, `Error`
@@ -49,23 +69,32 @@ AppModule                 — SharedPreferences ("scanner_prefs")
 
 ## OverlayActivity quirks
 
-- Transparent theme (`Theme.ScannerOverlay.Transparent`), `showWhenLocked`, `turnScreenOn`, `FLAG_KEEP_SCREEN_ON`
+- Transparent theme (`Theme.ScannerOverlay.Transparent`), `excludeFromRecents`, `taskAffinity=""`, `showWhenLocked`, `turnScreenOn`
 - При успешном скане: вибрация (200ms) → beep → `autoInjectText` → если не вышло, `injectText` → finish через 500ms
 - Torch toggle через `CameraControl.enableTorch()`
 
+## FloatingScanButton
+
+- WindowManager overlay (`TYPE_APPLICATION_OVERLAY`) — плавающая кнопка поверх всех окон
+- Drag-to-move с сохранением позиции в prefs (`floating_button_x/y`)
+- Tap запускает OverlayActivity; double-tap ignored (500ms debounce)
+- Требует SYSTEM_ALERT_WINDOW permission
+
 ## Permissions
 
-Запрашиваются: CAMERA, POST_NOTIFICATIONS (TIRAMISU+).  
+Запрашиваются программно: CAMERA, POST_NOTIFICATIONS (TIRAMISU+).  
 Ручные (через Settings): SYSTEM_ALERT_WINDOW, BIND_ACCESSIBILITY_SERVICE.  
-Декларированы в манифесте: VIBRATE, FOREGROUND_SERVICE, FOREGROUND_SERVICE_SPECIAL_USE, QUERY_ALL_PACKAGES.
+Декларированы в манифесте: VIBRATE, FOREGROUND_SERVICE, FOREGROUND_SERVICE_SPECIAL_USE, QUERY_ALL_PACKAGES, INTERNET, REQUEST_INSTALL_PACKAGES.
 
-## Tests
+## Release build
 
-No test files found in the project. No test framework configured.
+- `app/build.gradle.kts`: signing через `release.keystore` (alias `scanner`, пароль `scanner123`)
+- minifyEnabled = true, proguard-rules.pro включены
+- versionCode/versionName читаются из `defaultConfig`
 
 ## Non-obvious constraints
 
-- `build.ps1` завязан на конкретные пути SDK (G:\AndroidStudioSDK, G:\AndoidStudio\jbr)
 - `gradle.properties`: `android.overridePathCheck=true`, `android.suppressUnsupportedCompileSdk=36`
-- KAPT used for Hilt (`kapt` plugin, not KSP)
+- KSP used for Hilt (`ksp` plugin + `ksp(libs.hilt.compiler)`) — НЕ kapt
 - `ic_scan` — кастомный drawable для иконки уведомления
+- `checkReleaseBuilds = false` в lint — lint отключён при сборке релиза

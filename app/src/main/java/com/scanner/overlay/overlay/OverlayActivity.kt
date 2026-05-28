@@ -52,6 +52,7 @@ import androidx.activity.compose.BackHandler
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.Lifecycle
 import dagger.hilt.android.AndroidEntryPoint
+import java.util.concurrent.atomic.AtomicBoolean
 import androidx.compose.runtime.DisposableEffect
 import com.scanner.overlay.R
 import com.scanner.overlay.accessibility.ScannerAccessibilityService
@@ -89,10 +90,11 @@ class OverlayActivity : ComponentActivity() {
         checkCameraPermission()
 
         setContent {
+            val viewModel = hiltViewModel<OverlayViewModel>()
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     OverlayContent(
-                        viewModel = hiltViewModel(),
+                        viewModel = viewModel,
                         onClose = { finish() },
                         onBarcodeScanned = { barcode -> onBarcodeScanned(barcode) },
                         onManualSubmit = { barcode ->
@@ -105,6 +107,7 @@ class OverlayActivity : ComponentActivity() {
                                 }
                             }, 500)
                         },
+                        onRetry = { viewModel.resetToScanning() },
                         onCancelFinish = { cancelFinish() },
                         onRequestInputFocus = { requestInputFocus() },
                         onReleaseInputFocus = { releaseInputFocus() }
@@ -185,6 +188,7 @@ fun OverlayContent(
     onClose: () -> Unit,
     onBarcodeScanned: (String) -> Unit = {},
     onManualSubmit: (String) -> Unit,
+    onRetry: () -> Unit = {},
     onCancelFinish: () -> Unit = {},
     onRequestInputFocus: () -> Unit = {},
     onReleaseInputFocus: () -> Unit = {}
@@ -512,6 +516,16 @@ fun OverlayContent(
                         )
                         Spacer(Modifier.height(24.dp))
                         Button(
+                            onClick = onRetry,
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0x33FFFFFF)
+                            )
+                        ) {
+                            Text("Повторить", color = Color.White)
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Button(
                             onClick = { showManualInput = true },
                             shape = RoundedCornerShape(14.dp),
                             colors = ButtonDefaults.buttonColors(
@@ -542,11 +556,8 @@ fun CameraPreview(
     val context = androidx.compose.ui.platform.LocalContext.current
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
 
-    val scanPrefs = context.getSharedPreferences("scanner_prefs", android.content.Context.MODE_PRIVATE)
-    val startupDelayMs = scanPrefs.getLong("startup_delay_ms", 600L)
-
     val cameraControl = remember { mutableStateOf<CameraControl?>(null) }
-    var scanCompleted by remember { mutableStateOf(false) }
+    var scanCompleted = AtomicBoolean(false)
     val currentOnShowManualInput = rememberUpdatedState(onShowManualInput)
     val cameraProviderRef = remember { mutableStateOf<ProcessCameraProvider?>(null) }
 
@@ -586,19 +597,16 @@ fun CameraPreview(
                 }
                 val imageAnalysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .setTargetResolution(android.util.Size(1280, 720))
+                    .setDefaultResolution(android.util.Size(1280, 720))
+                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                     .build()
-                val scanPrefs = ctx.getSharedPreferences("scanner_prefs", android.content.Context.MODE_PRIVATE)
-                val startupDelayMs = scanPrefs.getLong("startup_delay_ms", 600L)
                 imageAnalysis.setAnalyzer(
                     java.util.concurrent.Executors.newSingleThreadExecutor(),
                     BarcodeAnalyzer(
-                        startupDelayMs = startupDelayMs,
                         onResult = { result ->
                             android.os.Handler(android.os.Looper.getMainLooper()).post {
                                 try {
-                                    if (result is ScannerResult.Success && !scanCompleted) {
-                                        scanCompleted = true
+                                    if (result is ScannerResult.Success && scanCompleted.compareAndSet(false, true)) {
                                         onBarcodeScanned(result)
                                     }
                                 } catch (e: Exception) {
