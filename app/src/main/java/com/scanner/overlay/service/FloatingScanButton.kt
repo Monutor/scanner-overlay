@@ -6,6 +6,8 @@ import android.content.SharedPreferences
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -36,6 +38,8 @@ class FloatingScanButton(
     private var initialTouchY = 0f
     private var isDragging = false
     private var lastTapTime = 0L
+    private val positionSaveHandler = Handler(Looper.getMainLooper())
+    private var savePositionRunnable: Runnable? = null
 
     private val button: ImageView
     private val params: WindowManager.LayoutParams
@@ -89,6 +93,7 @@ class FloatingScanButton(
 
     fun hide() {
         if (!isAdded) return
+        savePositionRunnable?.let { positionSaveHandler.removeCallbacks(it) }
         savePosition()
         button.setOnTouchListener(null)
         try {
@@ -120,6 +125,7 @@ class FloatingScanButton(
                     try {
                         windowManager.updateViewLayout(button, params)
                     } catch (_: Exception) {}
+                    schedulePositionSave()
                 }
                 true
             }
@@ -155,6 +161,12 @@ class FloatingScanButton(
             addFlags(Intent.FLAG_ACTIVITY_NO_USER_ACTION)
         }
         context.startActivity(intent)
+    }
+
+    private fun schedulePositionSave() {
+        savePositionRunnable?.let { positionSaveHandler.removeCallbacks(it) }
+        savePositionRunnable = Runnable { savePosition() }
+        positionSaveHandler.postDelayed(savePositionRunnable!!, 2000L)
     }
 
     private fun savePosition() {

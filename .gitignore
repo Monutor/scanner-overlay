@@ -32,3 +32,8 @@ update.json
 **/.kotlin/
 **/databinding/*.xml
 **/generated/
+
+# Temporary / development artifacts
+.playwright-mcp/
+.superpowers/
+

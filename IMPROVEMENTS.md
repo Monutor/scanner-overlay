@@ -150,34 +150,17 @@ private suspend fun <T> withRetry(
 
 ---
 
-### 7. Сохранение позиции FloatingButton при сворачивании/убийии сервиса
-**Файлы:** `FloatingScanButton.kt`, `ScannerForegroundService.kt`
+### 7. ✅ Сохранение позиции FloatingButton при сворачивании/убийии сервиса
+**Файлы:** `FloatingScanButton.kt`
 
-**Проблема:** Позиция сохраняется только на `ACTION_UP`. Если сервис убьют во время перетаскивания — позиция потеряется.
-
-**Решение:** Добавить сохранение по таймеру и при изменении атрибутов окна:
-```kotlin
-private val positionSaveHandler = Handler(Looper.getMainLooper())
-private var savePositionRunnable: Runnable? = null
-
-private fun schedulePositionSave() {
-    savePositionRunnable?.let { positionSaveHandler.removeCallbacks(it) }
-    savePositionRunnable = Runnable { savePosition() }
-    positionSaveHandler.postDelayed(savePositionRunnable!!, 2000L)
-}
-
-// В onTouchListener ACTION_MOVE:
-schedulePositionSave()
-```
+**Решено:** Добавлено периодическое сохранение позиции по таймеру (2с) во время drag + отмена при `hide()`.
 
 ---
 
-### 8. Звуковой сигнал при успешном сканировании (beep)
-**Файлы:** `OverlayActivity.kt` или отдельный файл `BeepPlayer.kt`
+### 8. ✅ Звуковой сигнал при успешном сканировании (beep)
+**Файлы:** `OverlayActivity.kt`
 
-**Проблема:** Вибрация есть, но звукового сигнала нет.
-
-**Решение:** Создать простой плеер через `SoundPool` и вызвать в `onBarcodeScanned()` после вибрации.
+**Решено:** `MediaPlayer` через `openRawResourceFd()` + fallback на системный звук уведомления. Вызывается в `onBarcodeScanned()` после вибрации. Файл `scan_beep.mp3` в `res/raw/`.
 
 ---
 
@@ -252,7 +235,7 @@ schedulePositionSave()
 
 ---
 
-### 16. Обработка onInterrupt() в AccessibilityService
+### 16. ✅ Обработка onInterrupt() в AccessibilityService
 **Файлы:** `ScannerAccessibilityService.kt`
 
 **Проблема:** Метод пустой, сервис может терять контекст при переключении приложений.
@@ -287,7 +270,7 @@ override fun onInterrupt() {
 | 5 | Утечка MLKit-клиента/executor | Средняя | 🔴 Высокое (память) |
 | 6 | Retry для автообновления | Средняя | 🟡 Среднее (надёжность) |
 | 7 | Сохранение позиции кнопки | Средняя | 🟡 Среднее (UX) |
-| 8 | Звуковой сигнал beep | Низкая | 🟢 Низкое (UX) |
+| 8 | ✅ Звуковой сигнал beep | Низкая | 🟢 Низкое (UX) |
 | 9 | Обработка поворота экрана | Средняя | 🟡 Среднее (стабильность) |
 | 10 | Избыточное логирование | Низкая | 🟡 Среднее (производительность) |
 | 11 | Утечка NodeInfo при обходе дерева | Средняя | 🟡 Среднее (стабильность) |

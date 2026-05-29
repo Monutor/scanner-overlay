@@ -3,7 +3,6 @@ package com.scanner.overlay.accessibility
 import android.accessibilityservice.AccessibilityService
 import android.content.ClipData
 import android.content.ClipboardManager
-import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -11,6 +10,8 @@ import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import dagger.hilt.android.AndroidEntryPoint
+import java.lang.ref.WeakReference
+import com.scanner.overlay.BuildConfig
 
 private fun AccessibilityNodeInfo.safeRecycle() {
     try { recycle() } catch (_: Exception) {}
@@ -19,22 +20,17 @@ private fun AccessibilityNodeInfo.safeRecycle() {
 @AndroidEntryPoint
 class ScannerAccessibilityService : AccessibilityService() {
 
-    private var textInjectionCallback: TextInjectionCallback? = null
     private var pendingClipboardRestore: ClipData? = null
     private var lastInjectedText: String? = null
 
-    interface TextInjectionCallback {
-        fun onTextInjected(success: Boolean)
-    }
-
     override fun onServiceConnected() {
         super.onServiceConnected()
-        instance = this
+        _instance = WeakReference(this)
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        instance = null
+        _instance.clear()
         pendingClipboardRestore?.let { original ->
             val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
             val currentClip = clipboard.primaryClip
@@ -54,69 +50,55 @@ class ScannerAccessibilityService : AccessibilityService() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_INJECT_TEXT) {
-            val text = intent.getStringExtra(EXTRA_TEXT) ?: ""
-            if (text.isNotEmpty()) {
-                injectText(text)
-            }
-        }
-        return START_NOT_STICKY
-    }
-
     fun autoInjectText(text: String): Boolean {
-        android.util.Log.d("ScannerAccessibility", "autoInjectText: text=$text, instance=${instance != null}, winCount=${windows.size}")
+        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "autoInjectText: text=$text, instance=${instance != null}, winCount=${windows.size}")
         val input = findFocusedOrEditable()
         if (input != null) {
-            android.util.Log.d("ScannerAccessibility", "autoInjectText: found node, pkg=${input.packageName}, editable=${input.isEditable}, focused=${input.isFocused}, visible=${input.isVisibleToUser}")
+            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "autoInjectText: found node, pkg=${input.packageName}, editable=${input.isEditable}, focused=${input.isFocused}, visible=${input.isVisibleToUser}")
             setText(input, text)
             return true
         }
-        android.util.Log.d("ScannerAccessibility", "autoInjectText: node NOT found")
+        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "autoInjectText: node NOT found")
         return false
     }
 
     fun injectText(text: String) {
-        android.util.Log.d("ScannerAccessibility", "injectText scheduled: text=$text")
+        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "injectText scheduled: text=$text")
         mainHandler.removeCallbacksAndMessages(null)
         mainHandler.postDelayed({
-            android.util.Log.d("ScannerAccessibility", "injectText running: winCount=${windows.size}")
+            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "injectText running: winCount=${windows.size}")
             val input = findFocusedOrEditable()
             if (input != null) {
-                android.util.Log.d("ScannerAccessibility", "injectText: found node, pkg=${input.packageName}")
+                if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "injectText: found node, pkg=${input.packageName}")
                 setText(input, text)
             } else {
-                android.util.Log.d("ScannerAccessibility", "injectText: node NOT found")
+                if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "injectText: node NOT found")
             }
         }, 600)
     }
 
-    fun setInjectionCallback(callback: TextInjectionCallback?) {
-        textInjectionCallback = callback
-    }
-
     private fun findFocusedOrEditable(): AccessibilityNodeInfo? {
-        android.util.Log.d("ScannerAccessibility", "findFocusedOrEditable: winCount=${windows.size}")
+        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "findFocusedOrEditable: winCount=${windows.size}")
         val focus = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-        android.util.Log.d("ScannerAccessibility", "findFocus result: $focus")
+        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "findFocus result: $focus")
         focus?.let {
             if (it.isEditable) {
-                android.util.Log.d("ScannerAccessibility", "findFocus is editable, returning")
+                if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "findFocus is editable, returning")
                 return it
             }
-            android.util.Log.d("ScannerAccessibility", "findFocus not editable (editable=${it.isEditable}, focused=${it.isFocused}), falling through to window scan")
+            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "findFocus not editable (editable=${it.isEditable}, focused=${it.isFocused}), falling through to window scan")
             it.safeRecycle()
         }
         for ((i, win) in windows.withIndex()) {
             val root = win.root ?: continue
-            android.util.Log.d("ScannerAccessibility", "  window[$i] pkg=${root.packageName} className=${root.className}")
+            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "  window[$i] pkg=${root.packageName} className=${root.className}")
             val found = findInputField(root)
             if (found != null) {
-                android.util.Log.d("ScannerAccessibility", "  window[$i] -> FOUND editable field! className=${found.className}")
+                if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "  window[$i] -> FOUND editable field! className=${found.className}")
                 return found
             }
         }
-        android.util.Log.d("ScannerAccessibility", "findFocusedOrEditable: no editable field found in any window")
+        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "findFocusedOrEditable: no editable field found in any window")
         return null
     }
 
@@ -135,6 +117,7 @@ class ScannerAccessibilityService : AccessibilityService() {
                     val child = node.getChild(i) ?: continue
                     queue.add(child)
                 }
+                node.safeRecycle()
             }
             depth++
         }
@@ -166,6 +149,7 @@ class ScannerAccessibilityService : AccessibilityService() {
                     val child = node.getChild(i) ?: continue
                     queue.add(child)
                 }
+                node.safeRecycle()
             }
             depth++
         }
@@ -190,6 +174,7 @@ class ScannerAccessibilityService : AccessibilityService() {
                     val child = node.getChild(i) ?: continue
                     queue.add(child)
                 }
+                node.safeRecycle()
             }
             depth++
         }
@@ -219,7 +204,6 @@ class ScannerAccessibilityService : AccessibilityService() {
             mainHandler.postDelayed({
                 pressEnter(node)
                 node.safeRecycle()
-                textInjectionCallback?.onTextInjected(true)
                 mainHandler.postDelayed({
                     findAndClickSendButton(2000, textToSend)
                 }, 400)
@@ -239,7 +223,6 @@ class ScannerAccessibilityService : AccessibilityService() {
 
         mainHandler.postDelayed({
             pasteFromContextMenu()
-            textInjectionCallback?.onTextInjected(false)
             mainHandler.postDelayed({
                 val pastedField = findFocusedOrEditable()
                 if (pastedField != null) {
@@ -324,13 +307,8 @@ class ScannerAccessibilityService : AccessibilityService() {
     }
 
     companion object {
-        // NOTE: Static singleton pattern used because AccessibilityService lifecycle
-        // is managed by Android and cannot be injected via Hilt.
-        // Alternative would require Broadcast/Intent-based communication.
-        @Suppress("StaticFieldLeak")
-        var instance: ScannerAccessibilityService? = null
-            private set
-        const val ACTION_INJECT_TEXT = "com.scanner.overlay.ACTION_INJECT_TEXT"
-        const val EXTRA_TEXT = "extra_text"
+        private var _instance: WeakReference<ScannerAccessibilityService?> = WeakReference(null)
+        val instance: ScannerAccessibilityService?
+            get() = _instance.get()
     }
 }

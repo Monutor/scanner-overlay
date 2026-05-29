@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -14,16 +16,21 @@ android {
         applicationId = "com.scanner.overlay"
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
-        versionName = "1.2.0"
+        versionCode = 9
+        versionName = "1.3.0"
     }
 
     signingConfigs {
         create("release") {
             storeFile = rootProject.file("release.keystore")
-            storePassword = "scanner123"
+            val localProps = rootProject.file("local.properties")
+            if (localProps.exists()) {
+                val props = Properties()
+                props.load(localProps.inputStream())
+                storePassword = props.getProperty("release.storePassword", "")
+                keyPassword = props.getProperty("release.keyPassword", "")
+            }
             keyAlias = "scanner"
-            keyPassword = "scanner123"
         }
     }
 

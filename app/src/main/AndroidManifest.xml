@@ -37,6 +37,7 @@
             android:taskAffinity=""
             android:showWhenLocked="true"
             android:turnScreenOn="true"
+            android:screenOrientation="portrait"
             android:theme="@style/Theme.ScannerOverlay.Transparent" />
 
         <service

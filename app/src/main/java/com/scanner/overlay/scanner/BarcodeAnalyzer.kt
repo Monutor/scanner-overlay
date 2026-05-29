@@ -7,7 +7,7 @@ import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
-import androidx.compose.ui.geometry.Rect
+import com.scanner.overlay.BuildConfig
 
 class BarcodeAnalyzer(
     private val maxCenterDistanceFraction: Float = 0.18f,
@@ -57,14 +57,14 @@ class BarcodeAnalyzer(
         val rotation = imageProxy.imageInfo.rotationDegrees
         val imgW = imageProxy.width
         val imgH = imageProxy.height
-        android.util.Log.d("BarcodeAnalyzer", "analyze frame: ${imgW}x${imgH} rot=$rotation")
+        if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "analyze frame: ${imgW}x${imgH} rot=$rotation")
 
         try {
             val inputImage = InputImage.fromMediaImage(mediaImage, rotation)
 
             scanner.process(inputImage)
                 .addOnSuccessListener { barcodes ->
-                    android.util.Log.d("BarcodeAnalyzer", "MLKit detected ${barcodes.size} barcode(s)")
+                    if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "MLKit detected ${barcodes.size} barcode(s)")
                     if (barcodes.isNotEmpty()) {
                         val isRotated = rotation == 90 || rotation == 270
                         val rotW = (if (isRotated) imgH else imgW).toFloat()
@@ -78,7 +78,7 @@ class BarcodeAnalyzer(
                         val validBarcodes = barcodes.filterNotNull().filter { it.boundingBox != null }
 
                         if (validBarcodes.isEmpty()) {
-                            android.util.Log.w("BarcodeAnalyzer", "No barcodes with boundingBox")
+                            if (BuildConfig.DEBUG) android.util.Log.w("BarcodeAnalyzer", "No barcodes with boundingBox")
                             return@addOnSuccessListener
                         }
 
@@ -95,51 +95,40 @@ class BarcodeAnalyzer(
                             (centerBarcode.boundingBox!!.centerY().toFloat() - centerImgY).toDouble()
                         )
                         if (dist > maxDist) {
-                            android.util.Log.d("BarcodeAnalyzer", "rejected too far from center: dist=$dist max=$maxDist (${centerBarcode.rawValue})")
+                            if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "rejected too far from center: dist=$dist max=$maxDist (${centerBarcode.rawValue})")
                             return@addOnSuccessListener
                         }
 
                         val value = centerBarcode.rawValue
                             ?: centerBarcode.displayValue
                             ?: run {
-                                android.util.Log.w("BarcodeAnalyzer", "barcode has no rawValue or displayValue")
+                                if (BuildConfig.DEBUG) android.util.Log.w("BarcodeAnalyzer", "barcode has no rawValue or displayValue")
                                 return@addOnSuccessListener
                             }
 
                         if (centerBarcode.format == Barcode.FORMAT_CODE_39 && value.length < 12) {
-                            android.util.Log.d("BarcodeAnalyzer", "rejected CODE_39 too short: $value (${value.length} chars)")
+                            if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "rejected CODE_39 too short: $value (${value.length} chars)")
                             return@addOnSuccessListener
                         }
 
                         val now = System.currentTimeMillis()
                         if (value == lastScannedCode && now - lastScanTime < cooldownMs) {
-                            android.util.Log.d("BarcodeAnalyzer", "rejected cooldown: $value (${now - lastScanTime}ms since last)")
+                            if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "rejected cooldown: $value (${now - lastScanTime}ms since last)")
                             return@addOnSuccessListener
                         }
 
                         if (scannedCodes.contains(value)) {
-                            android.util.Log.d("BarcodeAnalyzer", "rejected duplicate: $value")
+                            if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "rejected duplicate: $value")
                             return@addOnSuccessListener
                         }
                         addScannedCode(value)
                         lastScannedCode = value
                         lastScanTime = now
-                        android.util.Log.d("BarcodeAnalyzer", "SUCCESS (dist=$dist/$maxDist): $value format=${centerBarcode.format}")
+                        if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "SUCCESS (dist=$dist/$maxDist): $value format=${centerBarcode.format}")
 
-                        val overlayData = centerBarcode.boundingBox?.let { box ->
-                            BarcodeOverlayData(
-                                boundingBox = Rect(
-                                    box.left.toFloat(), box.top.toFloat(),
-                                    box.right.toFloat(), box.bottom.toFloat()
-                                ),
-                                imageWidth = imgW,
-                                imageHeight = imgH,
-                                imageRotation = rotation
-                            )
-                        }
                         val lookupResult = if (value.startsWith("STL")) BarcodeDatabase.lookup(value) else null
-                        android.util.Log.d("BarcodeAnalyzer", "lookup result: $lookupResult")
-                        onResult(ScannerResult.Success(value, centerBarcode.format, overlayData, lookupResult))
+                        if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "lookup result: $lookupResult")
+                        onResult(ScannerResult.Success(value, centerBarcode.format, lookupResult))
                     }
                 }
                 .addOnFailureListener { e ->
@@ -161,5 +150,9 @@ class BarcodeAnalyzer(
         while (scannedCodes.size > maxCachedCodes) {
             scannedCodes.poll()
         }
+    }
+
+    fun close() {
+        scanner.close()
     }
 }

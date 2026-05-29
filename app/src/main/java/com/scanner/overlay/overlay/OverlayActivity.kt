@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.media.MediaPlayer
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -161,16 +162,9 @@ class OverlayActivity : ComponentActivity() {
     }
 
     fun onBarcodeScanned(barcode: String, hasHint: Boolean = false) {
-        if (injectionAttempted) return
-        injectionAttempted = true
         try {
             vibrate()
-            val service = ScannerAccessibilityService.instance
-            android.util.Log.d("OverlayActivity", "onBarcodeScanned: barcode=$barcode, hasHint=$hasHint, service=${service != null}")
-            if (service?.autoInjectText(barcode) != true) {
-                android.util.Log.d("OverlayActivity", "autoInjectText failed, scheduling injectText")
-                service?.injectText(barcode)
-            }
+            playBeep()
         } catch (e: Exception) {
             android.util.Log.e("OverlayActivity", "onBarcodeScanned crash", e)
         }
@@ -199,6 +193,40 @@ class OverlayActivity : ComponentActivity() {
         } else {
             @Suppress("DEPRECATION")
             getSystemService(VIBRATOR_SERVICE) as Vibrator
+        }
+    }
+
+    private fun playBeep() {
+        try {
+            resources.openRawResourceFd(R.raw.scan_beep)?.use { afd ->
+                val mp = MediaPlayer()
+                var hadError = false
+                mp.setOnErrorListener { _, what, extra ->
+                    hadError = true
+                    mp.release()
+                    true
+                }
+                mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                mp.setOnCompletionListener { it.release() }
+                mp.prepare()
+                if (!hadError) {
+                    mp.start()
+                    return
+                }
+            }
+        } catch (_: Exception) { }
+        playSystemBeep()
+    }
+
+    private fun playSystemBeep() {
+        try {
+            val ringtone = android.media.RingtoneManager.getRingtone(
+                this,
+                android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION)
+            )
+            ringtone?.play()
+        } catch (e: Exception) {
+            android.util.Log.e("OverlayActivity", "playSystemBeep error", e)
         }
     }
 
@@ -282,6 +310,7 @@ fun OverlayContent(
                                         coroutineScope.launch {
                                             try {
                                                 detectedBarcode = true
+                                                onBarcodeScanned(result.barcode, result.lookupResult != null)
                                                 delay(2000)
                                                 viewModel.onBarcodeDetected(result)
                                                 onScheduleFinish(result.barcode, result.lookupResult != null)
@@ -299,6 +328,7 @@ fun OverlayContent(
                         manualInput = barcode
                     },
                     onCancelFinish = onCancelFinish,
+                    resetScanCompleted = state is OverlayViewModel.OverlayState.Scanning,
                     modifier = Modifier.fillMaxSize()
                 )
 
@@ -714,6 +744,7 @@ fun CameraPreview(
     onBarcodeScanned: (ScannerResult.Success) -> Unit,
     onShowManualInput: ((String) -> Unit)? = null,
     onCancelFinish: () -> Unit = {},
+    resetScanCompleted: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -721,9 +752,14 @@ fun CameraPreview(
 
     val cameraControl = remember { mutableStateOf<CameraControl?>(null) }
     val scanCompleted = remember { AtomicBoolean(false) }
+
+    LaunchedEffect(resetScanCompleted) {
+        if (resetScanCompleted) scanCompleted.set(false)
+    }
     val currentOnShowManualInput = rememberUpdatedState(onShowManualInput)
     val cameraProviderRef = remember { mutableStateOf<ProcessCameraProvider?>(null) }
     val analyzerExecutor = remember { java.util.concurrent.Executors.newSingleThreadExecutor() }
+    val scannerRef = remember { mutableStateOf<BarcodeAnalyzer?>(null) }
 
     LaunchedEffect(torchOn, cameraControl.value) {
         try {
@@ -744,6 +780,9 @@ fun CameraPreview(
             lifecycleOwner.lifecycle.removeObserver(observer)
             cameraProviderRef.value?.unbindAll()
             cameraControl.value = null
+            scannerRef.value?.close()
+            scannerRef.value = null
+            analyzerExecutor.shutdown()
         }
     }
 
@@ -761,7 +800,16 @@ fun CameraPreview(
                 }
                 val imageAnalysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .setDefaultResolution(android.util.Size(1280, 720))
+                    .apply {
+                        val quality = ctx.getSharedPreferences("scanner_prefs", android.content.Context.MODE_PRIVATE)
+                            .getInt("scan_quality", 1)
+                        val resolution = when (quality) {
+                            0 -> android.util.Size(640, 360)
+                            2 -> android.util.Size(1920, 1080)
+                            else -> android.util.Size(1280, 720)
+                        }
+                        setDefaultResolution(resolution)
+                    }
                     .build()
                 imageAnalysis.setAnalyzer(
                     analyzerExecutor,
@@ -777,7 +825,7 @@ fun CameraPreview(
                                 }
                             }
                         }
-                    )
+                    ).also { scannerRef.value = it }
                 )
                 try {
                     cameraProvider.unbindAll()
