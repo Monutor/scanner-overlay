@@ -1,6 +1,7 @@
 package com.scanner.overlay.overlay
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 
 import android.os.Build
@@ -57,6 +58,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import androidx.compose.runtime.DisposableEffect
 import com.scanner.overlay.R
 import com.scanner.overlay.accessibility.ScannerAccessibilityService
+import com.scanner.overlay.calibration.SewCalibration
 import com.scanner.overlay.scanner.BarcodeAnalyzer
 import com.scanner.overlay.scanner.BarcodeDatabase
 import com.scanner.overlay.scanner.BarcodeLookupResult
@@ -73,23 +75,97 @@ class OverlayActivity : ComponentActivity() {
     private var pendingBarcode: String? = null
     private var injectionAttempted = false
 
+    @javax.inject.Inject lateinit var sewCalibration: SewCalibration
+
+    private var isSubmittingToSew: Boolean = false
+
     private val finishRunnable = Runnable {
         android.util.Log.d("OverlayActivity", "finishRunnable executing, isFinishing=$isFinishing, barcode=${pendingBarcode}")
         try {
             val barcode = pendingBarcode
             if (!isFinishing && barcode != null && !injectionAttempted) {
                 injectionAttempted = true
-                val service = ScannerAccessibilityService.instance
-                if (service?.autoInjectText(barcode) != true) {
-                    android.util.Log.d("OverlayActivity", "autoInjectText failed, scheduling injectText")
-                    service?.injectText(barcode)
+                if (sewCalibration.isCalibrated) {
+                    triggerSewAutoInput(barcode)
+                } else {
+                    android.util.Log.d("OverlayActivity", "SEW not calibrated, falling back to autoInjectText")
+                    Toast.makeText(this, "Сделайте калибровку SEW", Toast.LENGTH_SHORT).show()
+                    val service = ScannerAccessibilityService.instance
+                    if (service?.autoInjectText(barcode) != true) {
+                        service?.injectText(barcode)
+                    }
+                    if (!isFinishing) finish()
                 }
+            } else if (!isFinishing) {
+                finish()
             }
         } catch (e: Exception) {
             android.util.Log.e("OverlayActivity", "finishRunnable crash", e)
-        } finally {
             if (!isFinishing) finish()
         }
+    }
+
+    private fun triggerSewAutoInput(barcode: String) {
+        isSubmittingToSew = true
+        val targetPkg = sewCalibration.targetPackage
+        android.util.Log.d(
+            "OverlayActivity",
+            "triggerSewAutoInput: barcode=$barcode pkg=$targetPkg isCalibrated=${sewCalibration.isCalibrated} " +
+                "openModal=(${sewCalibration.openModal.x},${sewCalibration.openModal.y}) " +
+                "confirm=(${sewCalibration.confirm.x},${sewCalibration.confirm.y})"
+        )
+        val service = ScannerAccessibilityService.instance
+        if (service == null) {
+            android.util.Log.w("OverlayActivity", "Accessibility service not running, falling back")
+            Toast.makeText(this, "Сервис доступности не запущен", Toast.LENGTH_SHORT).show()
+            if (!isFinishing) finish()
+            return
+        }
+        if (targetPkg.isNotEmpty() && !service.isTargetWindowActive(targetPkg)) {
+            val launchIntent = packageManager.getLaunchIntentForPackage(targetPkg)
+            if (launchIntent != null) {
+                launchIntent.addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                )
+                try {
+                    startActivity(launchIntent)
+                    android.util.Log.d("OverlayActivity", "triggerSewAutoInput: reordered $targetPkg to front (no reload)")
+                } catch (e: Exception) {
+                    android.util.Log.w("OverlayActivity", "Failed to bring $targetPkg to front", e)
+                }
+            }
+        } else if (targetPkg.isNotEmpty()) {
+            android.util.Log.d("OverlayActivity", "triggerSewAutoInput: $targetPkg already active, no launch needed")
+        }
+        service.runSewAutoInput(
+            barcode = barcode,
+            calibration = sewCalibration,
+            onResult = { ok, message -> onSewInputResult(ok, message) }
+        )
+        if (!isFinishing) finish()
+    }
+
+    private fun onSewInputResult(ok: Boolean, message: String) {
+        finishHandler.post {
+            isSubmittingToSew = false
+            val text = if (ok) {
+                "Штрих введён"
+            } else {
+                "Ошибка: ${message.take(120)}"
+            }
+            Toast.makeText(this, text, Toast.LENGTH_LONG).show()
+            vibrateResult(ok)
+        }
+    }
+
+    private fun vibrateResult(ok: Boolean) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val ms = if (ok) 100L else 400L
+                vibrator.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
+            }
+        } catch (_: Exception) {}
     }
 
     private val cameraPermissionLauncher = registerForActivityResult(
@@ -120,13 +196,14 @@ class OverlayActivity : ComponentActivity() {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     OverlayContent(
                         viewModel = viewModel,
+                        isSubmittingToSew = isSubmittingToSew,
                         onClose = { finish() },
                         onBarcodeScanned = { barcode, hasHint -> onBarcodeScanned(barcode, hasHint) },
                         onScheduleFinish = { barcode, hasHint ->
                             pendingBarcode = barcode
                             android.util.Log.d("ScanFlow", "onScheduleFinish: barcode=$barcode, hasHint=$hasHint")
                             finishHandler.removeCallbacks(finishRunnable)
-                            finishHandler.postDelayed(finishRunnable, 3000L)
+                            finishHandler.postDelayed(finishRunnable, 1500L)
                         },
                         onManualSubmit = { barcode ->
                             cancelFinish()
@@ -248,6 +325,7 @@ class OverlayActivity : ComponentActivity() {
 @Composable
 fun OverlayContent(
     viewModel: OverlayViewModel,
+    isSubmittingToSew: Boolean = false,
     onClose: () -> Unit,
     onBarcodeScanned: (String, Boolean) -> Unit,
     onScheduleFinish: (String, Boolean) -> Unit,
@@ -436,6 +514,36 @@ fun OverlayContent(
 
         // Full-screen overlays for non-scanning states
         when {
+            isSubmittingToSew -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0x99000000)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .background(Color(0x1AFFFFFF), RoundedCornerShape(24.dp))
+                            .border(0.5.dp, Color(0x14FFFFFF), RoundedCornerShape(24.dp))
+                            .padding(horizontal = 40.dp, vertical = 32.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(48.dp),
+                            color = Color(0xFF4CAF50),
+                            strokeWidth = 3.dp
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            "Ввод в SEW…",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp,
+                            color = Color.White
+                        )
+                    }
+                }
+            }
+
             showManualInput -> {
                 Box(
                     modifier = Modifier

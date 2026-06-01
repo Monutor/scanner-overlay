@@ -2,12 +2,16 @@ package com.scanner.overlay.settings
 
 import android.Manifest
 import android.content.pm.PackageManager
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,6 +25,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.scanner.overlay.calibration.SewCalibration
 import com.scanner.overlay.update.UpdateInfo
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -31,6 +36,7 @@ fun SettingsScreen(
     val isFloatingButtonEnabled by viewModel.isFloatingButtonEnabled.collectAsState()
     val scanTimeoutMs by viewModel.scanTimeoutMs.collectAsState()
     val scanQuality by viewModel.scanQuality.collectAsState()
+    val installedApps by viewModel.installedApps.collectAsState()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -61,6 +67,9 @@ fun SettingsScreen(
 
     val updateState by viewModel.updateState.collectAsState()
     val currentVersion = viewModel.currentVersion
+    val sewCalibration by viewModel.sewCalibration.collectAsState()
+    val sewTestResult by viewModel.sewTestResult.collectAsState()
+    val awaitingSewCalibration by viewModel.awaitingSewCalibration.collectAsState()
 
     Scaffold(
         topBar = {
@@ -101,6 +110,21 @@ fun SettingsScreen(
                 accessibilityGranted = accessibilityGranted,
                 onOpenOverlaySettings = { viewModel.openOverlaySettings() },
                 onOpenAccessibilitySettings = { viewModel.openAccessibilitySettings() }
+            )
+
+            SewCalibrationCard(
+                calibration = sewCalibration,
+                testResult = sewTestResult,
+                awaiting = awaitingSewCalibration,
+                installedApps = installedApps,
+                currentPackageLabel = installedApps.firstOrNull { it.packageName == sewCalibration.targetPackage }?.label,
+                onPickApp = { viewModel.setSewTargetPackage(it) },
+                onCalibrate = { viewModel.startSewCalibration() },
+                onCancelCalibrate = { viewModel.cancelSewCalibration() },
+                onReset = { viewModel.resetSewCalibration() },
+                onTest = {
+                    viewModel.runSewCalibrationTest()
+                }
             )
 
             UpdateCard(
@@ -534,5 +558,273 @@ private fun UpdateCard(
                 }
             }
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SewCalibrationCard(
+    calibration: SewCalibration,
+    testResult: SewTestResult,
+    awaiting: Boolean,
+    installedApps: List<AppInfo>,
+    currentPackageLabel: String?,
+    onPickApp: (String) -> Unit,
+    onCalibrate: () -> Unit,
+    onCancelCalibrate: () -> Unit,
+    onReset: () -> Unit,
+    onTest: () -> Unit
+) {
+    var appPickerOpen by remember { mutableStateOf(false) }
+    Card {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                "Калибровка SEW",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                when {
+                    awaiting -> "Оверлей активен. Сначала на «Ручной ввод» (откроется модалка), затем на «Готово»."
+                    currentPackageLabel != null -> "Приложение: $currentPackageLabel"
+                    else -> "Не выбрано приложение SEW."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (!awaiting) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "Как настроить",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    buildString {
+                        if (currentPackageLabel != null) {
+                            append("1. Откройте ").append(currentPackageLabel).append(" и перейдите на страницу сканирования.\n")
+                        } else {
+                            append("1. Выберите приложение SEW: Chrome, Яндекс.Браузер (обычная версия) или PWA-приложение SEW. Откройте его.\n")
+                        }
+                        append("2. Нажмите «Откалибровать» ниже.\n")
+                        append("3. Нажмите на «Ручной ввод» в SEW — откроется модалка.\n")
+                        append("4. Нажмите на «Готово» в модалке.")
+                        if (calibration.isCalibrated) {
+                            append("\n\nКнопка «Тест»: 5 секунд, чтобы открыть SEW, затем проверка работы.")
+                        }
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { appPickerOpen = true },
+                enabled = !awaiting,
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    text = if (currentPackageLabel != null) "Сменить приложение" else "Выбрать приложение",
+                    maxLines = 1,
+                    softWrap = false
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (awaiting) {
+                    OutlinedButton(
+                        onClick = onCancelCalibrate,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Отмена")
+                    }
+                } else {
+                    Button(
+                        onClick = onCalibrate,
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp)
+                    ) {
+                        Text(
+                            text = if (calibration.isCalibrated) "Перекалибровать" else "Откалибровать",
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = onTest,
+                        enabled = calibration.isCalibrated && !testResult.inProgress,
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp)
+                    ) {
+                        Text(
+                            text = if (testResult.inProgress) "Тест..." else "Тест",
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
+                }
+            }
+            if (calibration.isCalibrated) {
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onReset,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Сбросить калибровку")
+                }
+            }
+            if (testResult.countdownSeconds != null) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "Откройте SEW — осталось ${testResult.countdownSeconds} сек",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.height(6.dp))
+                LinearProgressIndicator(
+                    progress = { testResult.countdownSeconds!! / 5f },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            if (testResult.steps.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                testResult.steps.forEach { step ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = if (step.ok) Icons.Default.Check else Icons.Default.Close,
+                            contentDescription = null,
+                            tint = if (step.ok) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            step.name,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    step.message?.takeIf { !step.ok && it.isNotBlank() && it != "Ожидание..." }?.let { msg ->
+                        Text(
+                            msg,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(start = 24.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    if (appPickerOpen) {
+        AppPickerSheet(
+            apps = installedApps,
+            currentPackage = calibration.targetPackage,
+            onPick = { pkg ->
+                onPickApp(pkg)
+                appPickerOpen = false
+            },
+            onDismiss = { appPickerOpen = false }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AppPickerSheet(
+    apps: List<AppInfo>,
+    currentPackage: String,
+    onPick: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var query by remember { mutableStateOf("") }
+    val filtered = remember(apps, query) {
+        if (query.isBlank()) apps
+        else apps.filter {
+            it.label.contains(query, ignoreCase = true) ||
+                it.packageName.contains(query, ignoreCase = true)
+        }
+    }
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp)
+        ) {
+            Text(
+                "Выберите приложение SEW",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = { Text("Поиск") },
+                singleLine = true,
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = null
+                    )
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 480.dp)
+            ) {
+                items(filtered, key = { it.packageName }) { app ->
+                    val selected = app.packageName == currentPackage
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onPick(app.packageName) }
+                            .padding(vertical = 10.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                app.label,
+                                style = MaterialTheme.typography.bodyLarge,
+                                maxLines = 1
+                            )
+                            Text(
+                                app.packageName,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1
+                            )
+                        }
+                        if (selected) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                    HorizontalDivider()
+                }
+            }
+        }
     }
 }
