@@ -678,20 +678,6 @@ private fun SewCalibrationCard(
                     Text("Сбросить калибровку")
                 }
             }
-            if (testResult.countdownSeconds != null) {
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    "Откройте SEW — осталось ${testResult.countdownSeconds} сек",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Spacer(Modifier.height(6.dp))
-                LinearProgressIndicator(
-                    progress = { testResult.countdownSeconds!! / 5f },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
             if (testResult.steps.isNotEmpty()) {
                 Spacer(Modifier.height(12.dp))
                 testResult.steps.forEach { step ->

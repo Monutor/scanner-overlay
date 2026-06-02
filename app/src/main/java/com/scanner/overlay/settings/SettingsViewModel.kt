@@ -265,19 +265,17 @@ class SettingsViewModel @Inject constructor(
         _sewTestResult.value = SewTestResult(
             steps = stepNames.map { StepStatus(it, ok = false, message = "Ожидание...") },
             inProgress = true,
-            finished = false,
-            countdownSeconds = COUNTDOWN_SECONDS
+            finished = false
         )
-        android.widget.Toast.makeText(app, "Откройте SEW", android.widget.Toast.LENGTH_SHORT).show()
+        val countdownToast = android.widget.Toast.makeText(app, "", android.widget.Toast.LENGTH_SHORT)
         viewModelScope.launch {
-            for (i in (COUNTDOWN_SECONDS - 1) downTo 1) {
+            for (i in COUNTDOWN_SECONDS downTo 1) {
+                countdownToast.setText("Старт через $i сек")
+                countdownToast.cancel()
+                countdownToast.show()
                 kotlinx.coroutines.delay(1000L)
                 if (!_sewTestResult.value.inProgress) return@launch
-                _sewTestResult.value = _sewTestResult.value.copy(countdownSeconds = i)
             }
-            kotlinx.coroutines.delay(1000L)
-            if (!_sewTestResult.value.inProgress) return@launch
-            _sewTestResult.value = _sewTestResult.value.copy(countdownSeconds = null)
             service.runSewAutoInput(
                 barcode = "TEST_CALIBRATION",
                 calibration = calibration,

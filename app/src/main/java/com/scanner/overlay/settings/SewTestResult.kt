@@ -4,8 +4,7 @@ data class SewTestResult(
     val steps: List<StepStatus>,
     val inProgress: Boolean = false,
     val finished: Boolean = false,
-    val errorMessage: String? = null,
-    val countdownSeconds: Int? = null
+    val errorMessage: String? = null
 )
 
 data class StepStatus(

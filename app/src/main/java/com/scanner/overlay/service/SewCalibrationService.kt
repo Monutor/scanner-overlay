@@ -25,8 +25,21 @@ class SewCalibrationService : Service() {
 
     private lateinit var windowManager: WindowManager
     private lateinit var overlayView: FrameLayout
+    private lateinit var countdownToast: Toast
     private var prefs: SharedPreferences? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val addOverlayRunnable = Runnable { addOverlay() }
+    private val countdownRunnable = object : Runnable {
+        private var remaining = (STARTUP_DELAY_MS / 1000L).toInt()
+        override fun run() {
+            if (remaining <= 0) return
+            countdownToast.setText("Оверлей через $remaining сек")
+            countdownToast.cancel()
+            countdownToast.show()
+            remaining--
+            mainHandler.postDelayed(this, 1000L)
+        }
+    }
     private var capturedOpenModal = false
     private var openModalX = 0
     private var openModalY = 0
@@ -37,8 +50,10 @@ class SewCalibrationService : Service() {
         prefs = getSharedPreferences("scanner_prefs", MODE_PRIVATE)
         prefs?.edit()?.putBoolean(PREF_KEY_AWAITING, true)?.apply()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        startForeground(NOTIFICATION_ID, buildNotification(stepIndex = 0))
-        addOverlay()
+        countdownToast = Toast.makeText(this, "", Toast.LENGTH_SHORT)
+        startForeground(NOTIFICATION_ID, buildNotification(stepIndex = STEP_PREPARING))
+        mainHandler.post(countdownRunnable)
+        mainHandler.postDelayed(addOverlayRunnable, STARTUP_DELAY_MS)
     }
 
     private fun addOverlay() {
@@ -70,6 +85,14 @@ class SewCalibrationService : Service() {
         }
 
         windowManager.addView(overlayView, params)
+        updateNotification(stepIndex = 0)
+        mainHandler.post {
+            Toast.makeText(
+                this,
+                "Оверлей активен — тапните на «Ручной ввод»",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
     }
 
     private fun handleTap(x: Int, y: Int) {
@@ -150,6 +173,7 @@ class SewCalibrationService : Service() {
         )
 
         val text = when (stepIndex) {
+            STEP_PREPARING -> "Перейдите в SEW-приложение. Оверлей появится через 5 сек."
             0 -> "Шаг 1/2: нажмите на «Ручной ввод»"
             else -> "Шаг 2/2: откройте модалку и нажмите на «Готово»"
         }
@@ -165,6 +189,8 @@ class SewCalibrationService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            mainHandler.removeCallbacks(countdownRunnable)
+            mainHandler.removeCallbacks(addOverlayRunnable)
             stopSelf()
         }
         return START_NOT_STICKY
@@ -172,6 +198,11 @@ class SewCalibrationService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        mainHandler.removeCallbacks(countdownRunnable)
+        mainHandler.removeCallbacks(addOverlayRunnable)
+        if (::countdownToast.isInitialized) {
+            try { countdownToast.cancel() } catch (_: Exception) {}
+        }
         prefs?.edit()?.putBoolean(PREF_KEY_AWAITING, false)?.apply()
         if (::overlayView.isInitialized) {
             try {
@@ -185,6 +216,8 @@ class SewCalibrationService : Service() {
     companion object {
         private const val NOTIFICATION_ID = 1002
         private const val CHANNEL_ID = "sew_calibration_channel"
+        private const val STARTUP_DELAY_MS = 5000L
+        private const val STEP_PREPARING = -1
         const val ACTION_STOP = "com.scanner.overlay.service.STOP_SEW_CALIBRATION"
         const val PREF_KEY_AWAITING = "sew_awaiting_calibration"
     }
