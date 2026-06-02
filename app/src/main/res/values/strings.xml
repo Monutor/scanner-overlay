@@ -5,12 +5,6 @@
     <string name="notification_title">Сканер готов</string>
     <string name="notification_text">Нажмите для сканирования</string>
     <string name="scan_action">Стоп</string>
-    <string name="settings_title">Настройки</string>
     <string name="camera_unavailable">Камера недоступна</string>
-    <string name="barcode_found">Штрихкод найден</string>
-    <string name="enter_manually">Ввести вручную</string>
-    <string name="close">Закрыть</string>
-    <string name="permission_required">Требуется разрешение</string>
-    <string name="overlay_permission_hint">Разрешите отображать поверх других приложений</string>
-    <string name="accessibility_permission_hint">Включите ScannerOverlay в специальных возможностях</string>
+    <string name="accessibility_description">Автоматический ввод штрихкодов в выбранное приложение (SEW) и подтверждение отправки.</string>
 </resources>

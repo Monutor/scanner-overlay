@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
@@ -47,11 +48,20 @@ class SewCalibrationService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        isRunning = true
         prefs = getSharedPreferences("scanner_prefs", MODE_PRIVATE)
         prefs?.edit()?.putBoolean(PREF_KEY_AWAITING, true)?.apply()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         countdownToast = Toast.makeText(this, "", Toast.LENGTH_SHORT)
-        startForeground(NOTIFICATION_ID, buildNotification(stepIndex = STEP_PREPARING))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                buildNotification(stepIndex = STEP_PREPARING),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, buildNotification(stepIndex = STEP_PREPARING))
+        }
         mainHandler.post(countdownRunnable)
         mainHandler.postDelayed(addOverlayRunnable, STARTUP_DELAY_MS)
     }
@@ -127,7 +137,6 @@ class SewCalibrationService : Service() {
             }
         } else {
             prefs?.edit()
-                ?.putBoolean("sew_calibrated", true)
                 ?.putInt("sew_confirm_x", x)
                 ?.putInt("sew_confirm_y", y)
                 ?.apply()
@@ -198,6 +207,7 @@ class SewCalibrationService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        isRunning = false
         mainHandler.removeCallbacks(countdownRunnable)
         mainHandler.removeCallbacks(addOverlayRunnable)
         if (::countdownToast.isInitialized) {
@@ -220,5 +230,9 @@ class SewCalibrationService : Service() {
         private const val STEP_PREPARING = -1
         const val ACTION_STOP = "com.scanner.overlay.service.STOP_SEW_CALIBRATION"
         const val PREF_KEY_AWAITING = "sew_awaiting_calibration"
+
+        @Volatile
+        var isRunning: Boolean = false
+            private set
     }
 }

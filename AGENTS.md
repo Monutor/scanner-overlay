@@ -87,7 +87,6 @@ Android-приложение для сканирования штрихкодо�
 | `sew_target_package` | String | `""` | package name целевого приложения SEW (для авто-ввода) |
 | `sew_open_modal_x/y` | Int | `0` | координаты тапа по «Ручной ввод» в target app |
 | `sew_confirm_x/y` | Int | `0` | координаты тапа по «Готово» в открытой модалке target app |
-| `sew_calibrated` | Boolean | `false` | true после прохождения обоих шагов калибровки |
 | `sew_awaiting_calibration` | Boolean | `false` | true пока `SewCalibrationService` в onCreate, флаг занятой сессии |
 
 ## `ScannerAccessibilityService` (`accessibility/`)
@@ -179,12 +178,12 @@ Android-приложение для сканирования штрихкодо�
 - **KSP, не KAPT** для Hilt. В `app/build.gradle.kts` стоит `alias(libs.plugins.ksp)` и `ksp(libs.hilt.compiler)`. Если увидишь `kapt(...)` — это регрессия, не «стиль».
 - `gradle.properties` — нестандартные флаги: `android.overridePathCheck=true`, `android.suppressUnsupportedCompileSdk=36`, `android.builtInKotlin=false`, `android.newDsl=false`, `android.r8.strictFullModeForKeepRules=false`, `android.r8.optimizedResourceShrinking=false`, `android.usesSdkInManifest.disallowed=false`. Не «прибирать» их без причины.
 - `BarcodeAnalyzer` и `ScannerAccessibilityService` намеренно насыщены `BuildConfig.DEBUG`-gated `Log.d` вызовами — это рабочая диагностика, не шум. Удалять только если уверен, что фича стабильна.
-- `app/src/main/res/values/strings.xml` валиден (UTF-8), но почти не используется UI — Composables держат русские строки хардкодом (например, «штрихкод найден», «Готово», «Закрыть», «Ввести вручную», «Повторить», «Не найден в базе», «Найдено N варианта», «Выберите правильный:», «Отмена», «Ручной ввод», «Отправить», «Назад», «наведите на код»). Реально используются только `app_name`, `channel_name/description`, `notification_title/text`, `scan_action`. Если правишь `strings.xml` — не рассчитывай, что это влияет на большинство экранов.
+- `app/src/main/res/values/strings.xml` валиден (UTF-8), но почти не используется UI — Composables держат русские строки хардкодом (например, «штрихкод найден», «Готово», «Закрыть», «Ввести вручную», «Повторить», «Не найден в базе», «Найдено N варианта», «Выберите правильный:», «Отмена», «Ручной ввод», «Отправить», «Назад», «наведите на код»). Реально используются только `app_name`, `camera_unavailable`, `channel_name/description`, `notification_title/text`, `scan_action`. Если правишь `strings.xml` — не рассчитывай, что это влияет на большинство экранов.
 - `OverlayActivity` — `app/src/main/java/com/scanner/overlay/overlay/OverlayActivity.kt` держит `vibrator`, `prefs`, `finishHandler`, `pendingBarcode`, `injectionAttempted` как поля активити, не VM. Помни про поворот экрана / `onDestroy` cleanup.
 - `BarcodeDatabase` использует mutableList + HashMap без синхронизации на чтение — безопасно, потому что инициализация happens-before через `init()`. Не вызывай `init()` параллельно из разных активити.
 - В репо нет ни GitHub Actions, ни pre-commit хуков. Сборка и релиз — локальные через `build.ps1`.
 - Документы по дизайну лежат в `docs/superpowers/{specs,plans}/` — стоит читать перед крупными правками UI/UX.
-- Перед началом работы над фичей сверяйся с `docs/BUGS_AUDIT.md` (если существует) — там зафиксированы реальные краш/зависание баги с точными file:line.
+- Перед началом работы над фичей сверяйся с `docs/BUGS_AUDIT.md` (если существует) — там зафиксированы реальные краш/зависание баги с точными file:line. **По состоянию на 2026-06-02 все 30 пунктов аудита (A1–A4, B1–B10, C1–C12, D1–D6, кроме C11 как «не-баг») помечены как ✅ Исправлено — см. «Журнал исправлений» в начале файла.**
 
 ## Where to look when changing X
 

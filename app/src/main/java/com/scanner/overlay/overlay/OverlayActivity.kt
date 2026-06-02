@@ -43,6 +43,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.delay
@@ -57,6 +58,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import java.util.concurrent.atomic.AtomicBoolean
 import androidx.compose.runtime.DisposableEffect
 import com.scanner.overlay.R
+import com.scanner.overlay.ScannerApp
 import com.scanner.overlay.accessibility.ScannerAccessibilityService
 import com.scanner.overlay.calibration.SewCalibration
 import com.scanner.overlay.scanner.BarcodeAnalyzer
@@ -72,12 +74,14 @@ class OverlayActivity : ComponentActivity() {
     private lateinit var prefs: android.content.SharedPreferences
 
     private val finishHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private var pendingBarcode: String? = null
-    private var injectionAttempted = false
+    private val manualInputHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var manualInputRunnable: Runnable? = null
+    @Volatile private var pendingBarcode: String? = null
+    @Volatile private var injectionAttempted = false
 
     @javax.inject.Inject lateinit var sewCalibration: SewCalibration
 
-    private var isSubmittingToSew: Boolean = false
+    private val isSubmittingToSew = mutableStateOf(false)
 
     private val finishRunnable = Runnable {
         android.util.Log.d("OverlayActivity", "finishRunnable executing, isFinishing=$isFinishing, barcode=${pendingBarcode}")
@@ -106,7 +110,7 @@ class OverlayActivity : ComponentActivity() {
     }
 
     private fun triggerSewAutoInput(barcode: String) {
-        isSubmittingToSew = true
+        isSubmittingToSew.value = true
         val targetPkg = sewCalibration.targetPackage
         android.util.Log.d(
             "OverlayActivity",
@@ -148,14 +152,26 @@ class OverlayActivity : ComponentActivity() {
 
     private fun onSewInputResult(ok: Boolean, message: String) {
         finishHandler.post {
-            isSubmittingToSew = false
-            val text = if (ok) {
-                "Штрих введён"
-            } else {
-                "Ошибка: ${message.take(120)}"
-            }
-            Toast.makeText(this, text, Toast.LENGTH_LONG).show()
+            isSubmittingToSew.value = false
+            val title = if (ok) "Штрих введён" else "Ошибка ввода в SEW"
+            val text = if (ok) "Готово" else message.take(200)
+            notifySewResult(ok, title, text)
             vibrateResult(ok)
+        }
+    }
+
+    private fun notifySewResult(success: Boolean, title: String, text: String) {
+        try {
+            val builder = NotificationCompat.Builder(this, ScannerApp.SEW_RESULT_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_scan)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+            getSystemService(android.app.NotificationManager::class.java)
+                .notify(ScannerApp.SEW_RESULT_NOTIFICATION_ID, builder.build())
+        } catch (e: Exception) {
+            android.util.Log.e("OverlayActivity", "notifySewResult failed", e)
         }
     }
 
@@ -209,13 +225,17 @@ class OverlayActivity : ComponentActivity() {
                             cancelFinish()
                             finish()
                             injectionAttempted = true
-                            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                            manualInputRunnable?.let { manualInputHandler.removeCallbacks(it) }
+                            val r = Runnable {
                                 ScannerAccessibilityService.instance?.let {
                                     if (it.autoInjectText(barcode) != true) {
                                         it.injectText(barcode)
                                     }
                                 }
-                            }, 500)
+                                manualInputRunnable = null
+                            }
+                            manualInputRunnable = r
+                            manualInputHandler.postDelayed(r, 200)
                         },
                         onRetry = {
                             injectionAttempted = false
@@ -277,22 +297,26 @@ class OverlayActivity : ComponentActivity() {
         try {
             resources.openRawResourceFd(R.raw.scan_beep)?.use { afd ->
                 val mp = MediaPlayer()
-                var hadError = false
                 mp.setOnErrorListener { _, what, extra ->
-                    hadError = true
                     mp.release()
+                    playSystemBeep()
                     true
                 }
-                mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
                 mp.setOnCompletionListener { it.release() }
-                mp.prepare()
-                if (!hadError) {
-                    mp.start()
-                    return
+                mp.setOnPreparedListener { player ->
+                    try {
+                        player.start()
+                    } catch (_: Exception) {
+                        player.release()
+                        playSystemBeep()
+                    }
                 }
+                mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                mp.prepareAsync()
             }
-        } catch (_: Exception) { }
-        playSystemBeep()
+        } catch (_: Exception) {
+            playSystemBeep()
+        }
     }
 
     private fun playSystemBeep() {
@@ -308,24 +332,32 @@ class OverlayActivity : ComponentActivity() {
     }
 
     private fun vibrate() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            vibrator.vibrate(
-                VibrationEffect.createOneShot(200, VibrationEffect.DEFAULT_AMPLITUDE)
-            )
-        }
+        vibrator.vibrate(
+            VibrationEffect.createOneShot(200, VibrationEffect.DEFAULT_AMPLITUDE)
+        )
     }
 
     override fun onDestroy() {
         super.onDestroy()
         finishHandler.removeCallbacks(finishRunnable)
+        manualInputRunnable?.let { manualInputHandler.removeCallbacks(it) }
+        manualInputRunnable = null
     }
+}
+
+private fun shouldAutoInject(result: ScannerResult.Success): Boolean = when (val l = result.lookupResult) {
+    null -> true
+    is BarcodeLookupResult.ExactMatch -> true
+    is BarcodeLookupResult.FuzzyMatch -> true
+    is BarcodeLookupResult.PrefixMatch -> l.items.size == 1
+    BarcodeLookupResult.NotFound -> false
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OverlayContent(
     viewModel: OverlayViewModel,
-    isSubmittingToSew: Boolean = false,
+    isSubmittingToSew: State<Boolean> = remember { mutableStateOf(false) },
     onClose: () -> Unit,
     onBarcodeScanned: (String, Boolean) -> Unit,
     onScheduleFinish: (String, Boolean) -> Unit,
@@ -343,6 +375,7 @@ fun OverlayContent(
     var torchOn by remember { mutableStateOf(false) }
     var detectedBarcode by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
+    val isSubmitting by isSubmittingToSew
 
     LaunchedEffect(showManualInput) {
         if (showManualInput) onRequestInputFocus() else onReleaseInputFocus()
@@ -353,6 +386,12 @@ fun OverlayContent(
     }
 
     LaunchedEffect(state) {
+        if (state is OverlayViewModel.OverlayState.Scanning) {
+            if (detectedBarcode) {
+                android.util.Log.d("ScanFlow", "LaunchedEffect: state=Scanning, reset detectedBarcode")
+                detectedBarcode = false
+            }
+        }
         if (state is OverlayViewModel.OverlayState.Success) {
             val s = state as OverlayViewModel.OverlayState.Success
             android.util.Log.d("ScanFlow", "LaunchedEffect: state=Success, barcode=${s.barcode}, hasHint=${s.hasHint}")
@@ -391,7 +430,11 @@ fun OverlayContent(
                                                 onBarcodeScanned(result.barcode, result.lookupResult != null)
                                                 delay(2000)
                                                 viewModel.onBarcodeDetected(result)
-                                                onScheduleFinish(result.barcode, result.lookupResult != null)
+                                                if (shouldAutoInject(result)) {
+                                                    onScheduleFinish(result.barcode, result.lookupResult != null)
+                                                }
+                                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                                throw e
                                             } catch (e: Exception) {
                                                 android.util.Log.e("ScanFlow", "launch crash", e)
                                             }
@@ -514,7 +557,7 @@ fun OverlayContent(
 
         // Full-screen overlays for non-scanning states
         when {
-            isSubmittingToSew -> {
+            isSubmitting -> {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -860,14 +903,17 @@ fun CameraPreview(
 
     val cameraControl = remember { mutableStateOf<CameraControl?>(null) }
     val scanCompleted = remember { AtomicBoolean(false) }
+    val cameraFrameHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
+    val scannerRef = remember { mutableStateOf<BarcodeAnalyzer?>(null) }
 
     LaunchedEffect(resetScanCompleted) {
-        if (resetScanCompleted) scanCompleted.set(false)
+        if (resetScanCompleted) {
+            scanCompleted.set(false)
+            scannerRef.value?.reset()
+        }
     }
-    val currentOnShowManualInput = rememberUpdatedState(onShowManualInput)
     val cameraProviderRef = remember { mutableStateOf<ProcessCameraProvider?>(null) }
-    val analyzerExecutor = remember { java.util.concurrent.Executors.newSingleThreadExecutor() }
-    val scannerRef = remember { mutableStateOf<BarcodeAnalyzer?>(null) }
+    val analyzerExecutor = remember { java.util.concurrent.Executors.newSingleThreadScheduledExecutor() }
 
     LaunchedEffect(torchOn, cameraControl.value) {
         try {
@@ -881,16 +927,19 @@ fun CameraPreview(
                 cameraProviderRef.value?.unbindAll()
                 cameraControl.value = null
                 cameraProviderRef.value = null
+                analyzerExecutor.shutdown()
+                scannerRef.value?.close()
+                scannerRef.value = null
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { 
+        onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             cameraProviderRef.value?.unbindAll()
             cameraControl.value = null
+            analyzerExecutor.shutdown()
             scannerRef.value?.close()
             scannerRef.value = null
-            analyzerExecutor.shutdown()
         }
     }
 
@@ -922,8 +971,9 @@ fun CameraPreview(
                 imageAnalysis.setAnalyzer(
                     analyzerExecutor,
                     BarcodeAnalyzer(
+                        executor = analyzerExecutor,
                         onResult = { result ->
-                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                            cameraFrameHandler.post {
                                 try {
                                     if (result is ScannerResult.Success && scanCompleted.compareAndSet(false, true)) {
                                         onBarcodeScanned(result)

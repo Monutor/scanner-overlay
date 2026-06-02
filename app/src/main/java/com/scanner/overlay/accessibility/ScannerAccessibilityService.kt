@@ -32,6 +32,7 @@ class ScannerAccessibilityService : AccessibilityService() {
 
     @Volatile private var sewInputInProgress: Boolean = false
     @Volatile private var sewResultDelivered: Boolean = false
+    @Volatile private var pendingSewResult: SewInputCallback? = null
     private val watchdogHandler = Handler(Looper.getMainLooper())
     private val watchdogTimeoutMs: Long = 4_000L
 
@@ -51,6 +52,15 @@ class ScannerAccessibilityService : AccessibilityService() {
             }
         }
         pendingClipboardRestore = null
+        if (sewInputInProgress && !sewResultDelivered) {
+            val cb = pendingSewResult
+            pendingSewResult = null
+            if (cb != null) {
+                sewResultDelivered = true
+                sewInputInProgress = false
+                cb(false, "Сервис остановлен")
+            }
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
@@ -58,6 +68,7 @@ class ScannerAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {
         android.util.Log.w("ScannerAccessibility", "Service interrupted")
         mainHandler.removeCallbacksAndMessages(null)
+        watchdogHandler.removeCallbacksAndMessages(null)
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -95,22 +106,34 @@ class ScannerAccessibilityService : AccessibilityService() {
         if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "findFocus result: $focus")
         focus?.let {
             if (it.isEditable) {
-                if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "findFocus is editable, returning")
+                if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "findFocus is editable, returning pkg=${it.packageName}")
                 return it
             }
-            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "findFocus not editable (editable=${it.isEditable}, focused=${it.isFocused}), falling through to window scan")
+            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "findFocus not editable (editable=${it.isEditable}, focused=${it.isFocused}, pkg=${it.packageName}), falling through to window scan")
             it.safeRecycle()
         }
+        val ownPkg = BuildConfig.APPLICATION_ID
         for ((i, win) in windows.withIndex()) {
+            if (!win.isActive) {
+                if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "  window[$i] not active, skip")
+                continue
+            }
             val root = win.root ?: continue
-            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "  window[$i] pkg=${root.packageName} className=${root.className}")
+            val pkg = root.packageName?.toString() ?: ""
+            if (pkg == ownPkg) {
+                if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "  window[$i] own package ($pkg), skip")
+                root.safeRecycle()
+                continue
+            }
+            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "  window[$i] active pkg=$pkg className=${root.className}")
             val found = findInputField(root)
             if (found != null) {
-                if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "  window[$i] -> FOUND editable field! className=${found.className}")
+                if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "  window[$i] -> FOUND editable field! pkg=${found.packageName} className=${found.className}")
                 return found
             }
+            root.safeRecycle()
         }
-        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "findFocusedOrEditable: no editable field found in any window")
+        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "findFocusedOrEditable: no editable field found in any active window")
         return null
     }
 
@@ -217,9 +240,9 @@ class ScannerAccessibilityService : AccessibilityService() {
                 pressEnter(node)
                 node.safeRecycle()
                 mainHandler.postDelayed({
-                    findAndClickSendButton(2000, textToSend)
-                }, 400)
-            }, 300)
+                    findAndClickSendButton(500, textToSend)
+                }, 300)
+            }, 200)
             return
         }
 
@@ -242,7 +265,15 @@ class ScannerAccessibilityService : AccessibilityService() {
                     pastedField.safeRecycle()
                 }
                 pendingClipboardRestore = null
-                original?.let { clipboard.setPrimaryClip(it) }
+                val currentClip = clipboard.primaryClip
+                val stillOurs = currentClip != null &&
+                    currentClip.itemCount > 0 &&
+                    currentClip.getItemAt(0)?.text?.toString() == text
+                if (stillOurs) {
+                    original?.let { clipboard.setPrimaryClip(it) }
+                } else if (BuildConfig.DEBUG) {
+                    android.util.Log.d("ScannerAccessibility", "setText fallback: clipboard changed by user, skip restore")
+                }
             }, 3000)
         }, 250)
     }
@@ -288,10 +319,12 @@ class ScannerAccessibilityService : AccessibilityService() {
                 if (node != null && node.isClickable) {
                     node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                     node.safeRecycle()
+                    root.safeRecycle()
                     return
                 }
                 node?.safeRecycle()
             }
+            root.safeRecycle()
         }
     }
 
@@ -306,6 +339,7 @@ class ScannerAccessibilityService : AccessibilityService() {
                     for (win in windows) {
                         val root = win.root ?: continue
                         val sendBtn = findSendButton(root, targets)
+                        root.safeRecycle()
                         if (sendBtn != null && sendBtn.isClickable) {
                             sendBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                             sendBtn.safeRecycle()
@@ -331,17 +365,21 @@ class ScannerAccessibilityService : AccessibilityService() {
         onResult: SewInputCallback,
         onStep: SewStepCallback? = null
     ) {
-        if (sewInputInProgress) {
-            onResult(false, "Подождите завершения ввода")
-            return
+        val effectiveBarcode: String
+        synchronized(this) {
+            if (sewInputInProgress) {
+                onResult(false, "Подождите завершения ввода")
+                return
+            }
+            if (!calibration.isCalibrated) {
+                onResult(false, "Калибровка не выполнена")
+                return
+            }
+            sewInputInProgress = true
+            sewResultDelivered = false
+            pendingSewResult = onResult
+            effectiveBarcode = if (testMode) "TEST_CALIBRATION" else barcode
         }
-        if (!calibration.isCalibrated) {
-            onResult(false, "Калибровка не выполнена")
-            return
-        }
-        sewInputInProgress = true
-        sewResultDelivered = false
-        val effectiveBarcode = if (testMode) "TEST_CALIBRATION" else barcode
 
         step1FindWindow(calibration, testMode, effectiveBarcode, onResult, onStep)
     }
@@ -360,6 +398,12 @@ class ScannerAccessibilityService : AccessibilityService() {
         if (!sewInputInProgress) return
         watchdogHandler.removeCallbacksAndMessages(null)
         sewInputInProgress = false
+        val cb = pendingSewResult
+        pendingSewResult = null
+        if (cb != null && !sewResultDelivered) {
+            sewResultDelivered = true
+            cb(false, message)
+        }
     }
 
     private fun armWatchdog(onResult: SewInputCallback) {
@@ -378,6 +422,7 @@ class ScannerAccessibilityService : AccessibilityService() {
         onResult: SewInputCallback,
         onStep: SewStepCallback?
     ) {
+        armWatchdog(onResult)
         val immediate = findTargetWindow(calibration.targetPackage)
         if (immediate != null) {
             onStep?.invoke("SEW найден", true, null)
@@ -452,7 +497,7 @@ class ScannerAccessibilityService : AccessibilityService() {
         onStep: SewStepCallback?,
         attemptsLeft: Int
     ) {
-        dispatchGesture(
+        val accepted = dispatchGesture(
             GestureDescription.Builder()
                 .addStroke(
                     GestureDescription.StrokeDescription(
@@ -464,6 +509,20 @@ class ScannerAccessibilityService : AccessibilityService() {
                 .build(),
             null, null
         )
+        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "tryOpenModal: dispatchGesture accepted=$accepted point=(${point.x},${point.y}) attemptsLeft=$attemptsLeft")
+        if (!accepted) {
+            if (attemptsLeft > 1) {
+                mainHandler.postDelayed({
+                    if (!sewInputInProgress) return@postDelayed
+                    tryOpenModal(calibration, point, testMode, effectiveBarcode, onResult, onStep, attemptsLeft - 1)
+                }, 300L)
+                return
+            }
+            val msg = "Жест не принят системой (тап не дошёл)"
+            onStep?.invoke("Кнопка «Ручной ввод» доступна", false, msg)
+            releaseWatchdogAndFinish(onResult, false, msg)
+            return
+        }
         mainHandler.postDelayed({
             armWatchdog(onResult)
             val input = findInputFieldAcrossWindows()
@@ -493,6 +552,7 @@ class ScannerAccessibilityService : AccessibilityService() {
             if (!win.isActive) continue
             val root = win.root ?: continue
             val editable = findFirstEditable(root)
+            root.safeRecycle()
             if (editable != null) return editable
         }
         return null
@@ -543,12 +603,19 @@ class ScannerAccessibilityService : AccessibilityService() {
             val root = win.root ?: continue
             val found = findNodeContaining(root, text)
             if (found != null) {
-                if (found.isEditable) return found
+                if (found.isEditable) {
+                    root.safeRecycle()
+                    return found
+                }
                 val parent = found.parent
                 found.safeRecycle()
-                if (parent != null && parent.isEditable) return parent
+                if (parent != null && parent.isEditable) {
+                    root.safeRecycle()
+                    return parent
+                }
                 parent?.safeRecycle()
             }
+            root.safeRecycle()
         }
         return null
     }
@@ -633,13 +700,40 @@ class ScannerAccessibilityService : AccessibilityService() {
         val keyboardOpen = windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
         if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "closeKeyboardAndClickConfirm: keyboardOpen=$keyboardOpen")
         if (keyboardOpen) {
-            performGlobalAction(GLOBAL_ACTION_BACK)
-            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "closeKeyboardAndClickConfirm: GLOBAL_ACTION_BACK sent to dismiss keyboard")
+            waitForKeyboardClosed(calibration, testMode, onResult, onStep, attemptsLeft = 5)
+        } else {
+            mainHandler.postDelayed({
+                if (!sewInputInProgress) return@postDelayed
+                step6ClickConfirm(calibration, testMode, onResult, onStep)
+            }, 100L)
+        }
+    }
+
+    private fun waitForKeyboardClosed(
+        calibration: SewCalibration,
+        testMode: Boolean,
+        onResult: SewInputCallback,
+        onStep: SewStepCallback?,
+        attemptsLeft: Int
+    ) {
+        if (attemptsLeft <= 0) {
+            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "waitForKeyboardClosed: gave up after retries, clicking confirm anyway")
+            mainHandler.postDelayed({
+                if (!sewInputInProgress) return@postDelayed
+                step6ClickConfirm(calibration, testMode, onResult, onStep)
+            }, 100L)
+            return
         }
         mainHandler.postDelayed({
             if (!sewInputInProgress) return@postDelayed
-            step6ClickConfirm(calibration, testMode, onResult, onStep)
-        }, 350L)
+            val stillOpen = windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "waitForKeyboardClosed: stillOpen=$stillOpen attemptsLeft=$attemptsLeft")
+            if (!stillOpen) {
+                step6ClickConfirm(calibration, testMode, onResult, onStep)
+            } else {
+                waitForKeyboardClosed(calibration, testMode, onResult, onStep, attemptsLeft - 1)
+            }
+        }, 200L)
     }
 
     private fun step6ClickConfirm(
@@ -660,24 +754,37 @@ class ScannerAccessibilityService : AccessibilityService() {
             releaseWatchdogAndFinish(onResult, false, "Кнопка «Готово» не найдена")
             return
         }
-        textNode.safeRecycle()
 
         if (testMode) {
+            textNode.safeRecycle()
             onStep?.invoke("Кнопка «Готово» найдена", true, null)
             releaseWatchdogAndFinish(onResult, true, "Тест пройден")
             return
         }
 
-        clickConfirmAtCoords(calibration, onResult)
+        val rect = android.graphics.Rect()
+        textNode.getBoundsInScreen(rect)
+        textNode.safeRecycle()
+        val (tapX, tapY) = if (!rect.isEmpty) {
+            val cx = (rect.left + rect.right) / 2f
+            val cy = (rect.top + rect.bottom) / 2f
+            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "Готово: tap at fresh bounds ($cx, $cy) rect=$rect")
+            cx to cy
+        } else {
+            val x = calibration.confirm.x.toFloat()
+            val y = calibration.confirm.y.toFloat()
+            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "Готово: bounds empty, fallback to calibration ($x, $y)")
+            x to y
+        }
+        clickConfirmAtCoords(tapX, tapY, onResult)
     }
 
     private fun clickConfirmAtCoords(
-        calibration: SewCalibration,
+        x: Float,
+        y: Float,
         onResult: SewInputCallback
     ) {
-        val x = calibration.confirm.x.toFloat()
-        val y = calibration.confirm.y.toFloat()
-        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "Готово: tap at calibration coords ($x, $y)")
+        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "Готово: tap at ($x, $y)")
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(tapPath(x, y), 0L, 100L))
             .build()
@@ -718,6 +825,7 @@ class ScannerAccessibilityService : AccessibilityService() {
         sewInputInProgress = false
         if (sewResultDelivered) return
         sewResultDelivered = true
+        pendingSewResult = null
         onResult(ok, message)
     }
 

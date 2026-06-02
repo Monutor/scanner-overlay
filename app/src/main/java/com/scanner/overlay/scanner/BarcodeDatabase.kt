@@ -8,7 +8,7 @@ import java.io.InputStreamReader
 object BarcodeDatabase {
     private const val TAG = "BarcodeDatabase"
     private const val CSV_FILE = "barcodes.csv"
-    private const val MAX_FUZZY_DISTANCE = 2
+    private const val MAX_FUZZY_DISTANCE = 3
 
     private val items = mutableListOf<WarehouseItem>()
     private val exactMap = HashMap<String, WarehouseItem>()

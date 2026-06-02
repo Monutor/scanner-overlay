@@ -36,4 +36,5 @@ update.json
 # Temporary / development artifacts
 .playwright-mcp/
 .superpowers/
+scanner_settings.png
 

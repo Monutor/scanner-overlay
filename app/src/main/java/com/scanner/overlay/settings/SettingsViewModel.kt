@@ -47,7 +47,6 @@ class SettingsViewModel @Inject constructor(
         private const val PREF_KEY_SERVICE_RUNNING = "service_running"
         private const val PREF_KEY_SCAN_TIMEOUT = "scan_timeout_ms"
         private const val PREF_KEY_SCAN_QUALITY = "scan_quality"
-        private const val PREF_KEY_SEW_CALIBRATED = "sew_calibrated"
         private const val PREF_KEY_SEW_TARGET_PACKAGE = "sew_target_package"
         private const val PREF_KEY_SEW_OPEN_MODAL_X = "sew_open_modal_x"
         private const val PREF_KEY_SEW_OPEN_MODAL_Y = "sew_open_modal_y"
@@ -86,7 +85,6 @@ class SettingsViewModel @Inject constructor(
 
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         when (key) {
-            PREF_KEY_SEW_CALIBRATED,
             PREF_KEY_SEW_TARGET_PACKAGE,
             PREF_KEY_SEW_OPEN_MODAL_X,
             PREF_KEY_SEW_OPEN_MODAL_Y,
@@ -102,9 +100,14 @@ class SettingsViewModel @Inject constructor(
 
     init {
         refreshServiceState()
-        _awaitingSewCalibration.value = prefs.getBoolean(
+        val storedAwaiting = prefs.getBoolean(
             SewCalibrationService.PREF_KEY_AWAITING, false
         )
+        val actualAwaiting = storedAwaiting && SewCalibrationService.isRunning
+        if (storedAwaiting != actualAwaiting) {
+            prefs.edit().putBoolean(SewCalibrationService.PREF_KEY_AWAITING, actualAwaiting).apply()
+        }
+        _awaitingSewCalibration.value = actualAwaiting
         prefs.registerOnSharedPreferenceChangeListener(prefsListener)
         loadInstalledApps()
     }
@@ -132,7 +135,6 @@ class SettingsViewModel @Inject constructor(
     fun setSewTargetPackage(packageName: String) {
         prefs.edit()
             .putString(PREF_KEY_SEW_TARGET_PACKAGE, packageName)
-            .putBoolean(PREF_KEY_SEW_CALIBRATED, false)
             .putInt(PREF_KEY_SEW_OPEN_MODAL_X, 0)
             .putInt(PREF_KEY_SEW_OPEN_MODAL_Y, 0)
             .putInt(PREF_KEY_SEW_CONFIRM_X, 0)
@@ -190,7 +192,6 @@ class SettingsViewModel @Inject constructor(
     fun resetSewCalibration() {
         val current = _sewCalibration.value
         prefs.edit()
-            .putBoolean(PREF_KEY_SEW_CALIBRATED, false)
             .putInt(PREF_KEY_SEW_OPEN_MODAL_X, 0)
             .putInt(PREF_KEY_SEW_OPEN_MODAL_Y, 0)
             .putInt(PREF_KEY_SEW_CONFIRM_X, 0)
