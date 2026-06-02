@@ -52,9 +52,15 @@ class SettingsViewModel @Inject constructor(
         private const val PREF_KEY_SEW_OPEN_MODAL_Y = "sew_open_modal_y"
         private const val PREF_KEY_SEW_CONFIRM_X = "sew_confirm_x"
         private const val PREF_KEY_SEW_CONFIRM_Y = "sew_confirm_y"
+        const val PREF_KEY_SHELF_PICKER_ENABLED = "shelf_picker_enabled"
     }
 
     private val _isFloatingButtonEnabled = MutableStateFlow(false)
+
+    private val _shelfPickerEnabled = MutableStateFlow(
+        prefs.getBoolean(PREF_KEY_SHELF_PICKER_ENABLED, false)
+    )
+    val shelfPickerEnabled: StateFlow<Boolean> = _shelfPickerEnabled.asStateFlow()
 
     private val _scanTimeoutMs = MutableStateFlow(prefs.getLong(PREF_KEY_SCAN_TIMEOUT, 45_000L))
     val scanTimeoutMs: StateFlow<Long> = _scanTimeoutMs.asStateFlow()
@@ -187,6 +193,13 @@ class SettingsViewModel @Inject constructor(
         require(quality in 0..2) { "Quality must be 0, 1, or 2" }
         _scanQuality.value = quality
         prefs.edit().putInt(PREF_KEY_SCAN_QUALITY, quality).apply()
+    }
+
+    fun setShelfPickerEnabled(enabled: Boolean) {
+        if (enabled && !_sewCalibration.value.isCalibrated) return
+        if (_shelfPickerEnabled.value == enabled) return
+        _shelfPickerEnabled.value = enabled
+        prefs.edit().putBoolean(PREF_KEY_SHELF_PICKER_ENABLED, enabled).apply()
     }
 
     fun resetSewCalibration() {

@@ -10,6 +10,8 @@ object BarcodeDatabase {
     private const val CSV_FILE = "barcodes.csv"
     private const val MAX_FUZZY_DISTANCE = 3
 
+    private val SHELF_TYPES = setOf("С", "П", "З")
+
     private val items = mutableListOf<WarehouseItem>()
     private val exactMap = HashMap<String, WarehouseItem>()
 
@@ -108,4 +110,38 @@ object BarcodeDatabase {
     }
 
     fun size(): Int = items.size
+
+    fun getAllShelves(): List<WarehouseItem> {
+        if (!loaded) return emptyList()
+        return items.asSequence()
+            .filter { it.type in SHELF_TYPES }
+            .sortedBy { it.name.lowercase() }
+            .toList()
+    }
+
+    fun searchByName(query: String): List<WarehouseItem> {
+        if (!loaded) return emptyList()
+        if (query.isBlank()) return getAllShelves()
+        val q = query.trim().lowercase()
+        return items.asSequence()
+            .filter { it.type in SHELF_TYPES }
+            .filter { it.name.lowercase().contains(q) }
+            .sortedBy { it.name.lowercase() }
+            .toList()
+    }
+
+    fun getShelfSections(): List<String> {
+        if (!loaded) return emptyList()
+        return items.asSequence()
+            .filter { it.type in SHELF_TYPES }
+            .map { it.section }
+            .distinct()
+            .sortedBy { it.lowercase() }
+            .toList()
+    }
+
+    fun getByBarcode(barcode: String): WarehouseItem? {
+        if (!loaded || barcode.isBlank()) return null
+        return exactMap[barcode]
+    }
 }

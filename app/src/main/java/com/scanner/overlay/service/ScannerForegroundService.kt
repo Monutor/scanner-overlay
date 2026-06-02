@@ -16,6 +16,16 @@ import androidx.core.app.NotificationCompat
 import com.scanner.overlay.R
 import com.scanner.overlay.overlay.OverlayActivity
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -25,6 +35,10 @@ class ScannerForegroundService : Service() {
     lateinit var prefs: SharedPreferences
 
     private lateinit var floatingButton: FloatingScanButton
+    private lateinit var shelfPickerButton: ShelfPickerButton
+
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var shelfObserverJob: Job? = null
 
     companion object {
         private const val PREF_KEY_SERVICE_RUNNING = "service_running"
@@ -32,6 +46,7 @@ class ScannerForegroundService : Service() {
         const val NOTIFICATION_ID = 1001
         const val ACTION_START = "com.scanner.overlay.START"
         const val ACTION_STOP = "com.scanner.overlay.STOP"
+        const val PREF_KEY_SHELF_PICKER_ENABLED = "shelf_picker_enabled"
         @Volatile
         var isRunning: Boolean = false
             private set
@@ -43,6 +58,7 @@ class ScannerForegroundService : Service() {
         prefs.edit().putBoolean(PREF_KEY_SERVICE_RUNNING, true).apply()
         createNotificationChannel()
         floatingButton = FloatingScanButton(this, prefs)
+        shelfPickerButton = ShelfPickerButton(this, prefs)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID,
@@ -52,13 +68,16 @@ class ScannerForegroundService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, createNotification())
         }
+        startShelfPickerObserver()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         isRunning = false
         floatingButton.hide()
+        shelfPickerButton.hide()
         prefs.edit().putBoolean(PREF_KEY_SERVICE_RUNNING, false).apply()
+        serviceScope.cancel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -84,6 +103,26 @@ class ScannerForegroundService : Service() {
         }
         return START_STICKY
     }
+
+    private fun startShelfPickerObserver() {
+        shelfObserverJob?.cancel()
+        shelfObserverJob = serviceScope.launch {
+            shelfPickerEnabledFlow().collectLatest { enabled ->
+                if (enabled) shelfPickerButton.show() else shelfPickerButton.hide()
+            }
+        }
+    }
+
+    private fun shelfPickerEnabledFlow() = callbackFlow {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == PREF_KEY_SHELF_PICKER_ENABLED) {
+                trySend(prefs.getBoolean(PREF_KEY_SHELF_PICKER_ENABLED, false))
+            }
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        trySend(prefs.getBoolean(PREF_KEY_SHELF_PICKER_ENABLED, false))
+        awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }.distinctUntilChanged()
 
     private fun createNotification(): Notification {
         val scanIntent = Intent(this, OverlayActivity::class.java).apply {

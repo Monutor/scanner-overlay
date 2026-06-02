@@ -70,6 +70,7 @@ fun SettingsScreen(
     val sewCalibration by viewModel.sewCalibration.collectAsState()
     val sewTestResult by viewModel.sewTestResult.collectAsState()
     val awaitingSewCalibration by viewModel.awaitingSewCalibration.collectAsState()
+    val shelfPickerEnabled by viewModel.shelfPickerEnabled.collectAsState()
 
     Scaffold(
         topBar = {
@@ -110,6 +111,12 @@ fun SettingsScreen(
                 accessibilityGranted = accessibilityGranted,
                 onOpenOverlaySettings = { viewModel.openOverlaySettings() },
                 onOpenAccessibilitySettings = { viewModel.openAccessibilitySettings() }
+            )
+
+            ShelfPickerCard(
+                enabled = shelfPickerEnabled,
+                calibrated = sewCalibration.isCalibrated,
+                onToggle = { viewModel.setShelfPickerEnabled(it) }
             )
 
             SewCalibrationCard(
@@ -383,6 +390,52 @@ private fun PermissionRow(
                 tint = if (granted) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.error
             )
+        }
+    }
+}
+
+@Composable
+private fun ShelfPickerCard(
+    enabled: Boolean,
+    calibrated: Boolean,
+    onToggle: (Boolean) -> Unit
+) {
+    Card {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                "Выбор полки",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Вторая плавающая кнопка (оранжевая) открывает список полок с поиском. Выбор автоматически вводит штрих в SEW — удобно, когда в задании указана конкретная ячейка. Если ячейка не указана («любая полка в зоне»), отсканируйте штрих вручную как обычно.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        if (enabled) "Включено" else "Выключено",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    if (!calibrated) {
+                        Text(
+                            "Сначала откалибруйте SEW",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = onToggle,
+                    enabled = calibrated
+                )
+            }
         }
     }
 }
