@@ -9,192 +9,169 @@ Android-приложение для сканирования штрихкодо�
 - compileSdk / targetSdk = 36, minSdk = 26, Java 17
 - Gradle 8.7 (wrapper), AGP 8.5.2, **KSP (не KAPT!)** для Hilt
 - Version catalog: `gradle/libs.versions.toml`
-- Нет unit/instrumentation тестов (нет `src/test/`, `src/androidTest/`) — проверка только сборкой и установкой
+- Нет unit/instrumentation тестов — проверка только сборкой и установкой
 
-## Dev commands (PowerShell — `build.ps1`)
+## Dev commands
 
-| Command | What it does |
+| Команда | Что делает |
 |---|---|
-| `build.ps1 install` | `./gradlew installDebug` |
-| `build.ps1 apk` | `./gradlew assembleDebug` |
-| `build.ps1 run` | `adb shell am start` MainActivity |
-| `build.ps1 uninstall` | `adb uninstall com.scanner.overlay` |
-| `build.ps1 release` | `assembleRelease` + git tag + `gh release create` (нужен `gh` CLI) |
-| `build.ps1 install-release` | `assembleRelease` + `adb install -r` |
-| (default / no arg) | `adb install -r` на свежий debug APK (если нет — bundle) |
+| `.\gradlew installDebug` | Сборка + установка debug |
+| `.\gradlew assembleDebug` | Только сборка debug APK |
+| `build.ps1 install` | То же, что `installDebug` |
+| `build.ps1 apk` | `assembleDebug` (apk без установки) |
+| `build.ps1 run` | Launch MainActivity через adb |
+| `build.ps1 release` | Полный релиз (assembleRelease + git tag + gh release) |
+| `adb uninstall com.scanner.overlay` | Удаление |
 
-`JAVA_HOME` / `ANDROID_HOME` по умолчанию: `G:\AndroidStudio\jbr`, `G:\AndroidStudioSDK` (переопределяются через env).
+`JAVA_HOME` / `ANDROID_HOME` по умолчанию: `G:\AndroidStudio\jbr`, `G:\AndroidStudioSDK`. `build.ps1` сам их выставляет. Если вызываешь `gradlew` напрямую — выстави явно.
 
-Альтернатива: `build-and-install.bat` — uninstall → `installDebug --no-daemon` (Windows batch, без PowerShell).
+## Source layout
 
-## Source layout (verified)
-
-| File | Role |
+| Файл | Роль |
 |---|---|
 | `MainActivity.kt` | Лаунчер, запрашивает CAMERA + POST_NOTIFICATIONS, рендерит `SettingsScreen` |
-| `ScannerApp.kt` | `Application` + `@HiltAndroidApp` |
-| `settings/SettingsScreen.kt` | UI настроек (Compose, русский inline) |
-| `settings/SettingsViewModel.kt` | Сервис on/off, таймаут, качество, апдейт |
+| `ScannerApp.kt` | `@HiltAndroidApp` Application |
+| `settings/SettingsScreen.kt` | UI настроек (Compose, строки русские inline) |
+| `settings/SettingsViewModel.kt` | Сервис on/off, таймаут, качество, SEW-тест, авто-апдейт |
+| `settings/ShelfPickerActivity.kt` | Выбор полки из базы + поиск + авто-ввод в SEW |
 | `overlay/OverlayActivity.kt` | Прозрачный fullscreen + камера + анимации + ручной ввод |
-| `overlay/OverlayViewModel.kt` | Состояния сканера, 7s авто-reset для NotFound |
-| `scanner/BarcodeAnalyzer.kt` | MLKit, фильтрация по центру, cooldown, кэш |
-| `scanner/BarcodeDatabase.kt` | Загрузка CSV, exact/prefix/fuzzy lookup |
+| `overlay/OverlayViewModel.kt` | Состояния сканера (`OverlayState`), 7s авто-reset для NotFound |
+| `scanner/BarcodeAnalyzer.kt` | MLKit-анализ: фильтр по центру, cooldown, кэш, FrameWindow-подтверждение |
+| `scanner/BarcodeDatabase.kt` | Загрузка CSV из assets, exact/prefix/fuzzy поиск |
 | `scanner/BarcodeLookupResult.kt` | `WarehouseItem` + sealed `BarcodeLookupResult` |
-| `scanner/ScannerResult.kt` | Sealed `ScannerResult` |
-| `accessibility/ScannerAccessibilityService.kt` | Ввод текста в focused/editable поле, авто-Enter и Send, SEW auto-input |
-| `service/ScannerForegroundService.kt` | Persistent-уведомление, владелец FloatingScanButton |
-| `service/FloatingScanButton.kt` | WindowManager overlay-кнопка (drag-to-move, tap-to-launch) |
-| `service/SewCalibrationService.kt` | 2-tap калибровка таргет-приложения через WindowManager overlay |
-| `calibration/SewCalibration.kt` | Data class: `targetPackage` + 2 click points (`openModal`, `confirm`) |
-| `settings/SewTestResult.kt` | DTO для пошагового теста калибровки (countdown, steps) |
-| `settings/AppInfo.kt` | DTO: `packageName` + `label` для picker-а установленных приложений |
+| `scanner/BarcodeShape.kt` | Canonical форма `STL`+12 цифр для складских штрихкодов |
+| `scanner/FrameWindow.kt` | Скользящее временное окно для подтверждения штрихкода (2/300ms) |
+| `scanner/ScannerResult.kt` | Sealed: `Success(barcode, format, lookupResult?)` / `Error` |
+| `accessibility/ScannerAccessibilityService.kt` | Ввод текста в поля, SEW auto-input (6-шаговый pipeline) |
+| `service/ScannerForegroundService.kt` | Persistent notification + владелец FloatingScanButton |
+| `service/FloatingScanButton.kt` | WindowManager overlay-кнопка (drag, tap → OverlayActivity) |
+| `service/ShelfPickerButton.kt` | Оранжевая кнопка выбора полки (drag, tap → ShelfPickerActivity) |
+| `service/SewCalibrationService.kt` | 2-tap калибровка через overlay (шаги внизу на экране) |
+| `calibration/SewCalibration.kt` | Data class: `targetPackage` + 2 click points |
+| `calibration/SupportedBrowsers.kt` | Детекция Yandex/Chrome/Brave/Edge для SEW |
+| `settings/SewTestResult.kt` | DTO для пошагового теста калибровки |
+| `settings/AppInfo.kt` | DTO: `packageName` + `label` для picker-а приложений |
+| `settings/FavoritesStore.kt` | Избранные полки (max 5, pipe-separated в prefs) |
+| `util/Toasts.kt` | Bottom-aligned toast helpers |
 | `update/AutoUpdateManager.kt` | Скачивание APK с GitHub Releases, FileProvider install |
-| `di/AppModule.kt` | Hilt: `SharedPreferences` (`"scanner_prefs"`) + `SewCalibration` singleton |
+| `di/AppModule.kt` | Hilt: только `SharedPreferences` (`"scanner_prefs"`) |
 
-## Key types (verified — старые описания в репо были неверны)
+## Key types
 
-- `ScannerResult` — `Success(barcode: String, format: Int, lookupResult: BarcodeLookupResult? = null)` / `Error(message: String)`. **Нет** состояния `Scanning` (оно в `OverlayState`).
-- `OverlayState` (внутри `OverlayViewModel`) — `Scanning`, `Success(barcode, hasHint: Boolean)`, `NotFound(scannedBarcode)`, `MultipleMatches(items, scannedBarcode)`, `Error`.
-- `BarcodeLookupResult` — `ExactMatch(WarehouseItem)` / `PrefixMatch(List<WarehouseItem>)` / `FuzzyMatch(WarehouseItem, distance: Int)` / `NotFound`.
+- `ScannerResult` — `Success(barcode, format, lookupResult?)` / `Error`. **Нет** `Scanning` (оно в `OverlayState`).
+- `OverlayState` — `Scanning`, `Success(barcode, hasHint)`, `NotFound(scannedBarcode)`, `MultipleMatches(items, scannedBarcode)`, `Error`.
+- `BarcodeLookupResult` — `ExactMatch(WarehouseItem)` / `PrefixMatch(List)` / `FuzzyMatch(WarehouseItem, distance)` / `NotFound`.
 - `WarehouseItem(name, barcode, section, type, number, level)`.
-- `UpdateInfo`, `UpdateResult`, `UpdateUiState` — для авто-апдейта (см. ниже).
 
-## BarcodeAnalyzer (`scanner/BarcodeAnalyzer.kt`)
+## SharedPreferences `"scanner_prefs"`
 
-- `startupDelayMs = 1500L` — первые 1.5 сек после создания кадры игнорируются (фокус камеры + MLKit warm-up)
-- **Не crop**, а фильтр по расстоянию до центра: `maxCenterDistanceFraction = 0.18f` (18% диагонали кадра). Баркоды дальше от центра отбрасываются.
-- Cooldown 2 сек на одинаковый код; кэш последних 50 кодов против повторов
-- `CODE_39` < 12 символов отбрасывается
-- Warehouse lookup вызывается **только** если `barcode.startsWith("STL")` — иначе `lookupResult = null`
-- Форматы: QR, EAN-13/8, CODE-128/39/93, UPC-A/E, DataMatrix, Aztec, PDF417
+| Key | Type | Назначение |
+|---|---|---|
+| `service_running` | Boolean | Дублирует `ScannerForegroundService.isRunning` |
+| `scan_timeout_ms` | Long (default `45_000`) | 15/30/45/60/90/120 сек |
+| `scan_quality` | Int (default `1`) | `0`=640×360, `1`=1280×720, `2`=1920×1080 |
+| `floating_button_x/y` | Int | Позиция плавающей кнопки |
+| `shelf_button_x/y` | Int | Позиция кнопки выбора полки |
+| `sew_target_package` | String | package name SEW-приложения |
+| `shelf_picker_enabled` | Boolean | Видимость кнопки выбора полки |
+| `favorite_shelves_order` | String | Избранные полки (pipe-separated barcodes) |
+| `sew_open_modal_x/y` | Int | Координаты «Ручной ввод» |
+| `sew_confirm_x/y` | Int | Координаты «Готово» |
+| `sew_awaiting_calibration` | Boolean | Флаг занятой калибровочной сессии |
 
-## Warehouse CSV
+## SewCalibration — НЕ singleton, не Hilt-провайдер
 
-- Файл: `app/src/main/assets/barcodes.csv` (UTF-8). Колонки: `name,barcode,section,type,number,level`.
-- Загружается **синхронно** при первом `BarcodeDatabase.init(context)` в `OverlayActivity.onCreate` (двойной checked lock). Большие файлы заблокируют UI-поток — текущий файл ~194 строки, это OK.
-- Lookup: exact match → prefix match (один = exact, много = список) → Levenshtein fuzzy (max distance = 2) → `NotFound`.
-- В демо-данных баркоды имеют префикс `STL<digits>` (`STL000014010001` и т.п.) — без этого префикса lookup не вызывается в принципе.
+`SewCalibration` читается **свежим из SharedPreferences** при каждом использовании. Никакого `@Singleton`-провайдера в `AppModule` нет. `OverlayActivity`, `ShelfPickerActivity`, `SettingsViewModel` строят `SewCalibration` на месте через `buildSewCalibration()` / `readSewCalibration()`.
 
-## SharedPreferences `"scanner_prefs"` (verified keys)
+## ScannerAccessibilityService
 
-| Key | Type | Default | Назначение |
-|---|---|---|---|
-| `service_running` | Boolean | — | дублирует состояние `ScannerForegroundService.isRunning` |
-| `scan_timeout_ms` | Long | `45_000` | UI: 15/30/45/60/90/120 сек |
-| `scan_quality` | Int | `1` | `0`=640×360, `1`=1280×720, `2`=1920×1080 (ImageAnalysis) |
-| `floating_button_x` | Int | — | X позиции плавающей кнопки |
-| `floating_button_y` | Int | — | Y позиции плавающей кнопки |
-| `sew_target_package` | String | `""` | package name целевого приложения SEW (для авто-ввода) |
-| `sew_open_modal_x/y` | Int | `0` | координаты тапа по «Ручной ввод» в target app |
-| `sew_confirm_x/y` | Int | `0` | координаты тапа по «Готово» в открытой модалке target app |
-| `sew_awaiting_calibration` | Boolean | `false` | true пока `SewCalibrationService` в onCreate, флаг занятой сессии |
+- Синглтон через `companion._instance: WeakReference`.
+- Ввод текста: `ACTION_SET_TEXT` → fallback Clipboard + Paste через контекстное меню.
+- После вставки: `pressEnter` (`ACTION_IME_ENTER` → `ACTION_CLICK`) + `findAndClickSendButton` (ищет Send/Отправить/Submit/Готово/Done).
+- `safeRecycle()` с try/catch на каждом `recycle()`.
+- Gated `Log.d` по `BuildConfig.DEBUG` — рабочая диагностика, не шум.
 
-## `ScannerAccessibilityService` (`accessibility/`)
+### SEW auto-input pipeline (6 шагов)
 
-- Синглтон через `companion._instance: WeakReference` (сетится в `onServiceConnected`).
-- Попытка ввода в порядке:
-  1. `ACTION_SET_TEXT` сразу (`autoInjectText`).
-  2. Иначе `injectText` (postDelayed 600 мс) — даёт время на фокус/появление поля.
-  3. Внутри `setText`: если `ACTION_SET_TEXT` не сработал → ставит текст в Clipboard → `ACTION_CLICK` + `ACTION_FOCUS` → 250 мс → `pasteFromContextMenu` (long click → 400 мс → ищет «Вставить»/«Paste»/«Встав» в окнах через обход `windows`) → восстанавливает прежний clipboard.
-- **После успешной вставки**:
-  - `pressEnter`: `ACTION_IME_ENTER` (API 33+) с fallback `ACTION_CLICK`.
-  - Через 400 мс `findAndClickSendButton(2000ms timeout)` — ищет в окнах элемент с текстом/contentDescription, содержащим «Send»/«Отправить»/«Submit»/«Готово»/«Done», и кликает, только если в текущем поле действительно лежит наш баркод.
-- `findFocusedOrEditable` сначала пробует `findFocus(FOCUS_INPUT)`; если найденный узел не editable — рециклит его и идёт обходом по `windows` (BFS, depth ≤ 50).
-- Реактор-флаги: `safeRecycle()` (try/catch) на каждом `recycle()`, потому что Android кидает `IllegalStateException` если узел уже recycled.
-- Конфиг в `res/xml/accessibility_service_config.xml`: `flagReportViewIds|flagRetrieveInteractiveWindows`, `canPerformGestures`, `canRetrieveWindowContent`.
+`runSewAutoInput(barcode, calibration, testMode, onResult, onStep)` — асинхронный pipeline через `Handler` postDelayed:
 
-## `OverlayActivity` (`overlay/`)
+1. `step1FindWindow` — найти окно target, poll до 30×300ms
+2. `tryOpenModal` — dispatchGesture по `openModal` coords, до 3 retry, ждать 1s появления поля
+3. `step3FindInput` — найти editable поле
+4. `step4SetText` — `ACTION_SET_TEXT`. В testMode → сразу `step6ClickConfirm`
+5. `step5Verify` — проверить что текст вставлен → `closeKeyboardAndClickConfirm`
+6. `step6ClickConfirm` — найти «Готово» via BFS, вычислить bounds, dispatchGesture. **В testMode тоже диспатчит тап** (только без верификации)
 
-- Тема `Theme.ScannerOverlay.Transparent` (полупрозрачный фон, `windowIsTranslucent=true`, `windowCloseOnTouchOutside=true`).
-- Манифест: `excludeFromRecents="true"`, `taskAffinity=""`, `showWhenLocked="true"`, `turnScreenOn="true"`, `screenOrientation="portrait"`, `exported="false"`.
-- Window flags: `NOT_TOUCH_MODAL` + `WATCH_OUTSIDE_TOUCH` + `KEEP_SCREEN_ON` + `NOT_FOCUSABLE` (последний **снимается** только при открытии диалога ручного ввода и возвращается при закрытии).
-- Успешный скан: вибро 200 мс (`VibrationEffect.createOneShot`) → beep (`res/raw/scan_beep.mp3`, фолбэк — system ringtone `TYPE_NOTIFICATION`) → 2-секундная пауза для показа «штрихкод найден» → `onBarcodeDetected` → через **1.5 секунды** `finishRunnable` пробует `autoInjectText`, при неудаче `injectText`, затем `finish()`.
-- Manual input: кнопка `⌨` показывает диалог с полем, при submit — `autoInjectText` → fallback `injectText` через 500 мс, потом `finish()`.
-- `OverlayState.NotFound` автоматически сбрасывается в `Scanning` через 7 секунд (без подтверждения).
+Watchdog: 6 секунд. Если не перевзведён → `releaseWatchdogAndFinish(false, "Таймаут")`.
 
-## SEW auto-input (калибровка + авто-ввод)
+## OverlayActivity
 
-Целевая фича: пользователь выбирает SEW-приложение в Settings → проходит 2-tap калибровку → при сканировании баркода `OverlayActivity.triggerSewAutoInput` сам тапает по «Ручной ввод» в target app, ждёт модалку, тапает «Готово», и затем через `ScannerAccessibilityService` вставляет штрихкод.
+- Window flags: `NOT_TOUCH_MODAL | WATCH_OUTSIDE_TOUCH | KEEP_SCREEN_ON | NOT_FOCUSABLE`. `NOT_FOCUSABLE` снимается только при открытии диалога ручного ввода.
+- После успешного скана: вибро 200ms → beep (res/raw/scan_beep.mp3 или ringtone) → 2s пауза → `finishRunnable` → `autoInjectText` → fallback `injectText` → `finish()`.
+- `OverlayState.NotFound` сбрасывается в `Scanning` через 7s.
+- `triggerSewAutoInput(barcode)`: детектит активный браузер, вызывает `service.runSewAutoInput`. Результат → Notification (успех/ошибка).
 
-- `calibration/SewCalibration.kt` — Hilt-singleton, `targetPackage: String` + `openModal: Point` + `confirm: Point`. Геттер `isCalibrated: Boolean` (требует `targetPackage` непустой и обе точки ≠ (0,0)).
-- `service/SewCalibrationService.kt` — foreground-сервис (`foregroundServiceType="specialUse"`, канал `sew_calibration_channel`, `NOTIFICATION_ID=1002`). Поднимает полупрозрачный (`0x33000000`) fullscreen overlay через `WindowManager` (`TYPE_APPLICATION_OVERLAY`, `NOT_FOCUSABLE | NOT_TOUCH_MODAL | WATCH_OUTSIDE_TOUCH | LAYOUT_IN_SCREEN`), ловит `ACTION_UP` и пишет координаты в prefs. Если `sew_target_package` пуст — Toast + `stopSelf()`. Шаги: 1) тап по «Ручной ввод» → сохраняет `sew_open_modal_x/y`; 2) тап по «Готово» в открытой модалке → сохраняет `sew_confirm_x/y` + `sew_calibrated=true`.
-- `ScannerAccessibilityService` держит `@Volatile sewInputInProgress` + `sewResultDelivered` + `watchdogHandler` (4 сек таймаут) для SEW-флоу. `startSewAutoInput(barcode, calibration, onStep, onResult)` оркестрирует клики + ввод; коллбэки идут в `SettingsScreen.SewCalibrationCard` для теста.
-- `SettingsViewModel.runSewCalibrationTest` — end-to-end прогон с countdown 3 сек; результат стримится в `SewTestResult` (steps + countdown + finished/inProgress/errorMessage).
-- `settings/AppInfo.kt` — DTO `{packageName, label}` для picker-а установленных приложений в Settings.
+## SewCalibrationService
 
-## `ScannerForegroundService` (`service/`)
+Foreground-сервис, поднимает semi-transparent overlay + тёмную панель статуса внизу. Перед вызовом — countdown 5 секунд. Пользователь должен **заранее открыть модалку ручного ввода и убрать клавиатуру**, т.к. оверлей блокирует экран.
 
-- `foregroundServiceType="specialUse"` в манифесте.
-- Канал уведомления `CHANNEL_ID = "scanner_channel"`, IMPORTANCE_HIGH, `NOTIFICATION_ID = 1001`.
-- Иконка уведомления: `R.drawable.ic_scan` (кастомный drawable в `res/drawable/ic_scan.xml`).
-- Действия: tap → `OverlayActivity` (NO_HISTORY + EXCLUDE_FROM_RECENTS + NO_USER_ACTION); action-button → `ACTION_STOP` → `stopSelf()`.
-- При старте проверяет `Settings.canDrawOverlays()`: если false, открывает overlay-настройки и сразу `stopSelf()`.
-- Компаньон-флаг `isRunning: Boolean` (volatile) — UI читает его, не полагаясь на `ServiceConnection`.
+После калибровки: координаты сохраняются в prefs. Оверлей-кнопка + тост дублируют шаги.
 
-## `FloatingScanButton` (`service/`)
+## FloatingScanButton
 
-- `WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY`, `FLAG_NOT_FOCUSABLE`, `PixelFormat.TRANSLUCENT`, gravity `TOP|START`.
-- Кнопка 60dp, круглая, синяя (`#1976D2`), иконка — `R.drawable.ic_launcher_foreground` (НЕ `ic_scan`).
-- Drag-детект: `scaledTouchSlop`. Позиция сохраняется в prefs через debounce 2 сек после последнего `MOVE`, и сразу на `UP` если был drag.
-- Tap: 500 мс debounce (`lastTapTime`), запускает `OverlayActivity` с теми же флагами, что и из уведомления.
+WindowManager overlay: 60dp, круглая, синяя (`#1976D2`), `ic_launcher_foreground`. Drag-to-move с сохранением в prefs. Tap c debounce 500ms → OverlayActivity.
 
-## Auto-update (`update/AutoUpdateManager.kt`)
+## Auto-update
 
-- URL манифеста: `https://github.com/Monutor/scanner-overlay/releases/latest/download/update.json`.
-- Схема JSON: `{versionCode: Int, versionName: String, downloadUrl: String, releaseNotes: String}`.
-- Сравнивается с `BuildConfig.VERSION_CODE`. 3 ретрая с exponential backoff (1с → 2с → 4с).
-- HTTP timeouts: манифест 10с/15с, APK 15с/60с.
-- APK сохраняется в `context.externalCacheDir/app-update.apk`, ставится через `FileProvider` с authority `${applicationId}.fileprovider` (уже объявлен в манифесте).
-- `build.ps1 release` парсит `versionName/versionCode` из `app/build.gradle.kts`, генерит `update.json` локально, создаёт git tag, пушит, затем `gh release create` с двумя ассетами (`app-release.apk` + `update.json`). После успеха `update.json` удаляется. Если `gh` не установлен — тег уже на origin, аплоадить руками.
+Манифест: `github.com/Monutor/scanner-overlay/releases/latest/download/update.json`. 3 retry exponential backoff. APK → `externalCacheDir/app-update.apk` → FileProvider install.
 
 ## Permissions
 
-Запрашиваются программно (`MainActivity.onCreate` + `requestNeededPermissions`):
-- `CAMERA`
-- `POST_NOTIFICATIONS` (только TIRAMISU+, т.е. SDK 33+)
+- Runtime: `CAMERA`, `POST_NOTIFICATIONS` (SDK 33+)
+- Системные настройки: `SYSTEM_ALERT_WINDOW` → `ACTION_MANAGE_OVERLAY_PERMISSION`, `BIND_ACCESSIBILITY_SERVICE` → `ACTION_ACCESSIBILITY_SETTINGS`
+- В манифесте (без рантайма): `INTERNET`, `VIBRATE`, `FOREGROUND_SERVICE*`, `REQUEST_INSTALL_PACKAGES`, `BIND_ACCESSIBILITY_SERVICE`
+- **Нет** `QUERY_ALL_PACKAGES` — только launcher-приложения через `<queries><intent action="MAIN"/></queries>`
+- `uses-feature camera required="true"`
 
-Открывают системные настройки из `SettingsScreen`:
-- `SYSTEM_ALERT_WINDOW` → `Settings.ACTION_MANAGE_OVERLAY_PERMISSION` (с `package:...` URI)
-- `BIND_ACCESSIBILITY_SERVICE` → `Settings.ACTION_ACCESSIBILITY_SETTINGS`
+## Release workflow
 
-Декларированы в `AndroidManifest.xml` (без рантайм-запроса): `INTERNET`, `VIBRATE`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE`, `REQUEST_INSTALL_PACKAGES`, `BIND_ACCESSIBILITY_SERVICE`. Поле `uses-feature camera required="true"`.
+При команде «выпусти релиз» делаю без вопросов:
 
-**`QUERY_ALL_PACKAGES` НЕ заявлен и не используется** — список установленных приложений для SEW-picker-а получается через `<queries><intent action="android.intent.action.MAIN"/></intent></queries>` (только launcher-приложения).
-
-## Release / signing
-
-- `release.keystore` — в корне репо, в `.gitignore`. **Не коммитить** (хотя в текущей копии присутствует локально).
-- Пароли читаются из `local.properties` (тоже `.gitignore`):
-  - `release.storePassword=scanner123`
-  - `release.keyPassword=scanner123`
-  - `sdk.dir=G:\\AndroidStudioSDK`
-- Alias ключа: `scanner` (захардкожен в `app/build.gradle.kts`).
-- **И `debug`, и `release` buildType используют один и тот же release-signing config** — установка debug поверх release и наоборот не ломается.
-- `release`: `isMinifyEnabled = true`, `proguard-android-optimize.txt` + `proguard-rules.pro`.
-- `lint { checkReleaseBuilds = false }` — lint не блокирует релиз-сборку.
+1. `versionCode++` / `versionName` в `app/build.gradle.kts`
+2. `git add -A && git commit -m "v<version>"`
+3. `git tag v<version> && git push && git push --tags`
+4. `assembleRelease` (с env vars JAVA_HOME / ANDROID_HOME)
+5. Генерация `update.json` в корне (versionCode, versionName, downloadUrl)
+6. `gh release create v<version> app/build/outputs/apk/release/app-release.apk update.json`
+7. Удаление `update.json` локально
+8. `adb install -r app/build/outputs/apk/release/app-release.apk`
 
 ## Non-obvious gotchas
 
-- **KSP, не KAPT** для Hilt. В `app/build.gradle.kts` стоит `alias(libs.plugins.ksp)` и `ksp(libs.hilt.compiler)`. Если увидишь `kapt(...)` — это регрессия, не «стиль».
-- `gradle.properties` — нестандартные флаги: `android.overridePathCheck=true`, `android.suppressUnsupportedCompileSdk=36`, `android.builtInKotlin=false`, `android.newDsl=false`, `android.r8.strictFullModeForKeepRules=false`, `android.r8.optimizedResourceShrinking=false`, `android.usesSdkInManifest.disallowed=false`. Не «прибирать» их без причины.
-- `BarcodeAnalyzer` и `ScannerAccessibilityService` намеренно насыщены `BuildConfig.DEBUG`-gated `Log.d` вызовами — это рабочая диагностика, не шум. Удалять только если уверен, что фича стабильна.
-- `app/src/main/res/values/strings.xml` валиден (UTF-8), но почти не используется UI — Composables держат русские строки хардкодом (например, «штрихкод найден», «Готово», «Закрыть», «Ввести вручную», «Повторить», «Не найден в базе», «Найдено N варианта», «Выберите правильный:», «Отмена», «Ручной ввод», «Отправить», «Назад», «наведите на код»). Реально используются только `app_name`, `camera_unavailable`, `channel_name/description`, `notification_title/text`, `scan_action`. Если правишь `strings.xml` — не рассчитывай, что это влияет на большинство экранов.
-- `OverlayActivity` — `app/src/main/java/com/scanner/overlay/overlay/OverlayActivity.kt` держит `vibrator`, `prefs`, `finishHandler`, `pendingBarcode`, `injectionAttempted` как поля активити, не VM. Помни про поворот экрана / `onDestroy` cleanup.
-- `BarcodeDatabase` использует mutableList + HashMap без синхронизации на чтение — безопасно, потому что инициализация happens-before через `init()`. Не вызывай `init()` параллельно из разных активити.
-- В репо нет ни GitHub Actions, ни pre-commit хуков. Сборка и релиз — локальные через `build.ps1`.
-- Документы по дизайну лежат в `docs/superpowers/{specs,plans}/` — стоит читать перед крупными правками UI/UX.
-- Перед началом работы над фичей сверяйся с `docs/BUGS_AUDIT.md` (если существует) — там зафиксированы реальные краш/зависание баги с точными file:line. **По состоянию на 2026-06-02 все 30 пунктов аудита (A1–A4, B1–B10, C1–C12, D1–D6, кроме C11 как «не-баг») помечены как ✅ Исправлено — см. «Журнал исправлений» в начале файла.**
+- **KSP, не KAPT** для Hilt. Если увидишь `kapt(...)` — регрессия.
+- `gradle.properties` — нестандартные флаги, не «прибирать».
+- `strings.xml` почти не используется — UI строки в Compose хардкодом (русские).
+- `BarcodeDatabase` инициализируется синхронно без блокировок чтения — только из `OverlayActivity.onCreate`.
+- Нет CI/CD, сборка только локально.
+- `OverlayActivity` держит `vibrator`, `prefs`, `finishHandler` как поля активити — помни про `onDestroy`.
+- И debug и release используют один release-signing config — установка поверх не ломается.
+- `build.ps1` сам выставляет `JAVA_HOME` / `ANDROID_HOME`. Если вызываешь `gradlew` напрямую — выстави явно.
+- `BarcodeAnalyzer` использует `FrameWindow` (2+ совпадения за 300ms) для складских штрихкодов; не-складские срабатывают сразу с dedup-кэшем (50 записей).
+- `BarcodeShape` определяет каноническую форму `STL`+12 цифр (15 символов) — основа для фильтрации warehouse-кодов.
+- Дизайн-доки: `docs/superpowers/{specs,plans}/`. Баги визуала: `docs/DESIGN_BACKLOG.md` (10 issues, все иконки — placeholder `Icons.Default.Refresh`).
 
-## Where to look when changing X
+## Where to look
 
-| Задача | Начать с |
+| Задача | Файлы |
 |---|---|
-| Логика сканирования / фильтры | `scanner/BarcodeAnalyzer.kt` |
-| Что показывать после скана | `overlay/OverlayViewModel.kt` (`OverlayState`) + `OverlayActivity.kt` (UI-блоки по `when`) |
-| Ввод текста в чужое приложение | `accessibility/ScannerAccessibilityService.kt` |
-| SEW-калибровка (2-tap overlay) | `service/SewCalibrationService.kt` + `calibration/SewCalibration.kt` |
-| SEW auto-input flow (тапы + вставка) | `OverlayActivity.triggerSewAutoInput` + `ScannerAccessibilityService.startSewAutoInput` + `SettingsViewModel.runSewCalibrationTest` |
-| Плавающая кнопка | `service/FloatingScanButton.kt` + `ScannerForegroundService.kt` |
-| Авто-апдейт | `update/AutoUpdateManager.kt` + `build.ps1 release` |
-| Складская база | `app/src/main/assets/barcodes.csv` + `scanner/BarcodeDatabase.kt` |
-| Настройки пользователя | `settings/SettingsScreen.kt` + `SettingsViewModel.kt` (там же `scan_timeout_ms` / `scan_quality`) |
+| Логика сканирования / фильтры | `BarcodeAnalyzer.kt` |
+| UI после скана | `OverlayViewModel.kt` + `OverlayActivity.kt` |
+| Ввод текста в чужое приложение | `ScannerAccessibilityService.kt` |
+| SEW-калибровка (2-tap) | `SewCalibrationService.kt` + `SewCalibration.kt` |
+| SEW auto-input (тапы + вставка) | `OverlayActivity.triggerSewAutoInput` + `ScannerAccessibilityService.runSewAutoInput` + `SettingsViewModel.runSewCalibrationTest` |
+| Floating scan button | `FloatingScanButton.kt` + `ScannerForegroundService.kt` |
+| Авто-апдейт | `AutoUpdateManager.kt` |
+| Складская база | `assets/barcodes.csv` + `BarcodeDatabase.kt` |
+| Настройки / SEW-тест | `SettingsScreen.kt` + `SettingsViewModel.kt` |
+| Выбор полки + поиск | `ShelfPickerActivity.kt` |
+| Избранные полки (favorites) | `FavoritesStore.kt` |

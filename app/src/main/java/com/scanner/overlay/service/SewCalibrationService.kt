@@ -37,7 +37,7 @@ class SewCalibrationService : Service() {
         private var remaining = (STARTUP_DELAY_MS / 1000L).toInt()
         override fun run() {
             if (remaining <= 0) return
-            countdownToast.setText("Оверлей через $remaining сек • Заранее откройте модалку ручного ввода")
+            countdownToast.setText("Оверлей через $remaining сек")
             countdownToast.cancel()
             countdownToast.show()
             remaining--
@@ -198,9 +198,9 @@ class SewCalibrationService : Service() {
         )
 
         val text = when (stepIndex) {
-            STEP_PREPARING -> "Перед калибровкой откройте модалку ручного ввода и уберите клавиатуру"
+            STEP_PREPARING -> "Перейдите в SEW-приложение. Оверлей появится через 5 сек."
             0 -> "Шаг 1/2: нажмите на «Ручной ввод»"
-            else -> "Шаг 2/2: нажмите на «Готово»"
+            else -> "Шаг 2/2: откройте модалку и нажмите на «Готово»"
         }
         return Notification.Builder(this, channelId)
             .setContentTitle("Калибровка SEW")
