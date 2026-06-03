@@ -44,6 +44,7 @@ import com.scanner.overlay.accessibility.ScannerAccessibilityService
 import com.scanner.overlay.calibration.SewCalibration
 import com.scanner.overlay.scanner.BarcodeDatabase
 import com.scanner.overlay.scanner.WarehouseItem
+import com.scanner.overlay.util.toastAtBottom
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
@@ -51,13 +52,13 @@ import javax.inject.Inject
 class ShelfPickerActivity : ComponentActivity() {
 
     @Inject
-    lateinit var calibration: SewCalibration
-
-    @Inject
     lateinit var favoritesStore: FavoritesStore
+
+    private lateinit var prefs: android.content.SharedPreferences
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        prefs = getSharedPreferences("scanner_prefs", MODE_PRIVATE)
         BarcodeDatabase.init(applicationContext)
         setContent {
             MaterialTheme {
@@ -71,30 +72,53 @@ class ShelfPickerActivity : ComponentActivity() {
     }
 
     private fun onShelfPicked(item: WarehouseItem) {
+        android.util.Log.d("ShelfPickerActivity", "onShelfPicked: name=${item.name} barcode=${item.barcode}")
         val service = ScannerAccessibilityService.instance
         if (service == null) {
-            Toast.makeText(this, "Включите специальные возможности", Toast.LENGTH_SHORT).show()
-            finish()
+            android.util.Log.w("ShelfPickerActivity", "AccessibilityService.instance is null")
+            toastAtBottom("Включите специальные возможности", Toast.LENGTH_LONG)
             return
         }
-        if (!calibration.isCalibrated) {
-            Toast.makeText(this, "Сначала откалибруйте SEW", Toast.LENGTH_SHORT).show()
-            finish()
+        val cal = buildSewCalibration()
+        if (!cal.isCalibrated) {
+            android.util.Log.w("ShelfPickerActivity", "Calibration not set")
+            toastAtBottom("Сначала откалибруйте SEW", Toast.LENGTH_LONG)
             return
         }
-        Toast.makeText(this, "Штрих полки «${item.name}»…", Toast.LENGTH_SHORT).show()
+        val targetPkg = cal.targetPackage
+        if (targetPkg.isEmpty()) {
+            android.util.Log.w("ShelfPickerActivity", "targetPackage is empty")
+            toastAtBottom("Сначала откалибруйте SEW", Toast.LENGTH_LONG)
+            return
+        }
+        android.util.Log.d("ShelfPickerActivity", "Starting runSewAutoInput barcode=${item.barcode} pkg=$targetPkg")
+        toastAtBottom("Штрих полки «${item.name}»…", Toast.LENGTH_SHORT)
+        if (!isFinishing) finish()
         service.runSewAutoInput(
             barcode = item.barcode,
-            calibration = calibration,
+            calibration = cal,
             onResult = { ok, message ->
-                Toast.makeText(
-                    this@ShelfPickerActivity,
+                android.util.Log.d("ShelfPickerActivity", "runSewAutoInput result: ok=$ok message=$message")
+                toastAtBottom(
                     if (ok) "Готово" else "Ошибка: $message",
                     Toast.LENGTH_LONG
-                ).show()
+                )
             }
         )
-        finish()
+    }
+
+    private fun buildSewCalibration(): SewCalibration {
+        return SewCalibration(
+            targetPackage = prefs.getString("sew_target_package", "") ?: "",
+            openModal = android.graphics.Point(
+                prefs.getInt("sew_open_modal_x", 0),
+                prefs.getInt("sew_open_modal_y", 0)
+            ),
+            confirm = android.graphics.Point(
+                prefs.getInt("sew_confirm_x", 0),
+                prefs.getInt("sew_confirm_y", 0)
+            )
+        )
     }
 }
 

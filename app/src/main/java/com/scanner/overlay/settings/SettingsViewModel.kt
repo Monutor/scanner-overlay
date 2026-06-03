@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Build
 import android.provider.Settings
+import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.scanner.overlay.BuildConfig
@@ -17,6 +18,8 @@ import com.scanner.overlay.service.SewCalibrationService
 import com.scanner.overlay.update.AutoUpdateManager
 import com.scanner.overlay.update.UpdateInfo
 import com.scanner.overlay.update.UpdateResult
+import com.scanner.overlay.util.reusableBottomToast
+import com.scanner.overlay.util.toastAtBottom
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,8 +41,7 @@ sealed interface UpdateUiState {
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val app: Application,
-    private val prefs: SharedPreferences,
-    private val currentCalibration: SewCalibration
+    private val prefs: SharedPreferences
 ) : AndroidViewModel(app) {
 
     companion object {
@@ -73,7 +75,7 @@ class SettingsViewModel @Inject constructor(
     private val _updateState = MutableStateFlow<UpdateUiState>(UpdateUiState.Idle)
     val updateState: StateFlow<UpdateUiState> = _updateState.asStateFlow()
 
-    private val _sewCalibration = MutableStateFlow(currentCalibration)
+    private val _sewCalibration = MutableStateFlow(readSewCalibration())
     val sewCalibration: StateFlow<SewCalibration> = _sewCalibration.asStateFlow()
 
     private val _sewTestResult = MutableStateFlow(
@@ -217,8 +219,8 @@ class SettingsViewModel @Inject constructor(
         _sewTestResult.value = SewTestResult(steps = emptyList(), finished = true)
     }
 
-    fun refreshSewCalibration() {
-        val cal = SewCalibration(
+    private fun readSewCalibration(): SewCalibration {
+        return SewCalibration(
             targetPackage = prefs.getString(PREF_KEY_SEW_TARGET_PACKAGE, "") ?: "",
             openModal = android.graphics.Point(
                 prefs.getInt(PREF_KEY_SEW_OPEN_MODAL_X, 0),
@@ -229,7 +231,10 @@ class SettingsViewModel @Inject constructor(
                 prefs.getInt(PREF_KEY_SEW_CONFIRM_Y, 0)
             )
         )
-        _sewCalibration.value = cal
+    }
+
+    fun refreshSewCalibration() {
+        _sewCalibration.value = readSewCalibration()
     }
 
     fun startSewCalibration() {
@@ -281,7 +286,7 @@ class SettingsViewModel @Inject constructor(
             inProgress = true,
             finished = false
         )
-        val countdownToast = android.widget.Toast.makeText(app, "", android.widget.Toast.LENGTH_SHORT)
+        val countdownToast = reusableBottomToast(app)
         viewModelScope.launch {
             for (i in COUNTDOWN_SECONDS downTo 1) {
                 countdownToast.setText("Старт через $i сек")
@@ -306,11 +311,10 @@ class SettingsViewModel @Inject constructor(
                         inProgress = false,
                         finished = true
                     )
-                    android.widget.Toast.makeText(
-                        app,
+                    app.toastAtBottom(
                         if (ok) "Тест пройден" else "Тест не пройден: $message",
-                        android.widget.Toast.LENGTH_LONG
-                    ).show()
+                        Toast.LENGTH_LONG
+                    )
                 },
                 onStep = { name, ok, message ->
                     val current = _sewTestResult.value
@@ -321,11 +325,7 @@ class SettingsViewModel @Inject constructor(
                         _sewTestResult.value = current.copy(steps = updated)
                     }
                     if (!ok && message != null) {
-                        android.widget.Toast.makeText(
-                            app,
-                            "$name: $message",
-                            android.widget.Toast.LENGTH_SHORT
-                        ).show()
+                        app.toastAtBottom("$name: $message")
                     }
                 }
             )

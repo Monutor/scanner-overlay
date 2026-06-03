@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
@@ -16,6 +17,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import java.lang.ref.WeakReference
 import com.scanner.overlay.BuildConfig
 import com.scanner.overlay.calibration.SewCalibration
+import com.scanner.overlay.calibration.SupportedBrowsers
 
 typealias SewInputCallback = (success: Boolean, message: String) -> Unit
 typealias SewStepCallback = (name: String, ok: Boolean, message: String?) -> Unit
@@ -33,8 +35,9 @@ class ScannerAccessibilityService : AccessibilityService() {
     @Volatile private var sewInputInProgress: Boolean = false
     @Volatile private var sewResultDelivered: Boolean = false
     @Volatile private var pendingSewResult: SewInputCallback? = null
+    @Volatile private var lastEffectiveTarget: String = ""
     private val watchdogHandler = Handler(Looper.getMainLooper())
-    private val watchdogTimeoutMs: Long = 4_000L
+    private val watchdogTimeoutMs: Long = 6_000L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -234,7 +237,9 @@ class ScannerAccessibilityService : AccessibilityService() {
             )
         }
         node.refresh()
-        if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+        val setTextOk = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "setText(legacy): ACTION_SET_TEXT ok=$setTextOk pkg=${node.packageName} text='$text'")
+        if (setTextOk) {
             val textToSend = text
             mainHandler.postDelayed({
                 pressEnter(node)
@@ -246,14 +251,16 @@ class ScannerAccessibilityService : AccessibilityService() {
             return
         }
 
+        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "setText(legacy): ACTION_SET_TEXT FAILED, using clipboard+contextMenu fallback")
         val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
         val original = clipboard.primaryClip
         pendingClipboardRestore = original
         clipboard.setPrimaryClip(ClipData.newPlainText("barcode", text))
 
         node.refresh()
-        node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-        node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+        val clickOk = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        val focusOk = node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "setText(legacy): ACTION_CLICK ok=$clickOk ACTION_FOCUS ok=$focusOk")
         node.safeRecycle()
 
         mainHandler.postDelayed({
@@ -300,9 +307,11 @@ class ScannerAccessibilityService : AccessibilityService() {
 
     private fun pasteFromContextMenu() {
         val focused = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "pasteFromContextMenu: focused=${focused != null}")
         if (focused != null) {
             focused.refresh()
-            focused.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
+            val longClickOk = focused.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
+            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "pasteFromContextMenu: ACTION_LONG_CLICK ok=$longClickOk")
             focused.safeRecycle()
         }
         mainHandler.postDelayed({
@@ -312,11 +321,14 @@ class ScannerAccessibilityService : AccessibilityService() {
 
     private fun findAndClickPaste() {
         val targets = listOf("Вставить", "Paste", "Встав")
+        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "findAndClickPaste: searching ${windows.size} windows for $targets")
         for (win in windows) {
             val root = win.root ?: continue
             for (text in targets) {
                 val node = findNodeContaining(root, text)
                 if (node != null && node.isClickable) {
+                    val pkg = win.root?.packageName?.toString() ?: "<null>"
+                    if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "findAndClickPaste: found '$text' in pkg=$pkg, clicking")
                     node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                     node.safeRecycle()
                     root.safeRecycle()
@@ -325,6 +337,10 @@ class ScannerAccessibilityService : AccessibilityService() {
                 node?.safeRecycle()
             }
             root.safeRecycle()
+        }
+        if (BuildConfig.DEBUG) {
+            val winSummary = windows.mapNotNull { it.root?.packageName?.toString() }.distinct().joinToString(",")
+            android.util.Log.d("ScannerAccessibility", "findAndClickPaste: NOT FOUND. activePackages=[$winSummary]")
         }
     }
 
@@ -366,6 +382,7 @@ class ScannerAccessibilityService : AccessibilityService() {
         onStep: SewStepCallback? = null
     ) {
         val effectiveBarcode: String
+        val effectiveTarget: String
         synchronized(this) {
             if (sewInputInProgress) {
                 onResult(false, "Подождите завершения ввода")
@@ -375,13 +392,40 @@ class ScannerAccessibilityService : AccessibilityService() {
                 onResult(false, "Калибровка не выполнена")
                 return
             }
+            val detected = detectActiveSupportedBrowser()
+            effectiveTarget = detected ?: calibration.targetPackage
+            if (effectiveTarget.isEmpty()) {
+                onResult(false, "Откройте SEW в поддерживаемом браузере")
+                return
+            }
+            logEnvironmentSnapshot("env.start", effectiveTarget, detected, calibration)
+            if (BuildConfig.DEBUG) android.util.Log.d(
+                "ScannerAccessibility",
+                "runSewAutoInput: effectiveTarget=$effectiveTarget (detected=$detected, configured=${calibration.targetPackage})"
+            )
             sewInputInProgress = true
             sewResultDelivered = false
             pendingSewResult = onResult
+            lastEffectiveTarget = effectiveTarget
             effectiveBarcode = if (testMode) "TEST_CALIBRATION" else barcode
         }
 
-        step1FindWindow(calibration, testMode, effectiveBarcode, onResult, onStep)
+        mainHandler.postDelayed({
+            if (!sewInputInProgress) return@postDelayed
+            step1FindWindow(calibration, effectiveTarget, testMode, effectiveBarcode, onResult, onStep)
+        }, 500L)
+    }
+
+    private fun detectActiveSupportedBrowser(): String? {
+        for (win in windows) {
+            if (!win.isActive) continue
+            if (win.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
+            val pkg = win.root?.packageName?.toString() ?: continue
+            if (pkg in SupportedBrowsers.SUPPORTED_PACKAGES) {
+                return pkg
+            }
+        }
+        return null
     }
 
     fun isTargetWindowActive(targetPackage: String): Boolean {
@@ -392,6 +436,66 @@ class ScannerAccessibilityService : AccessibilityService() {
         return windows.filter { it.isActive }
             .mapNotNull { it.root?.packageName?.toString() }
             .distinct()
+    }
+
+    fun ensureTargetWindowActive(
+        activity: android.app.Activity,
+        targetPackage: String,
+        onResult: (active: Boolean) -> Unit
+    ) {
+        if (targetPackage.isEmpty()) { onResult(true); return }
+        if (isTargetWindowActive(targetPackage)) {
+            android.util.Log.d("ScannerAccessibilityService", "ensureTarget: $targetPackage already active")
+            onResult(true)
+            return
+        }
+        android.util.Log.d(
+            "ScannerAccessibilityService",
+            "ensureTarget: $targetPackage not in windows; windows=${debugActiveWindows()}"
+        )
+        val launchIntent = android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
+            setPackage(targetPackage)
+            addFlags(
+                android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                    android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+            )
+        }
+        try {
+            activity.startActivity(launchIntent)
+            android.util.Log.d("ScannerAccessibilityService", "ensureTarget: startActivity sent")
+        } catch (e: Exception) {
+            android.util.Log.w(
+                "ScannerAccessibilityService",
+                "ensureTarget: launch failed for $targetPackage: ${e.message}"
+            )
+        }
+        pollForTargetActive(targetPackage, attemptsLeft = 15, onResult = onResult)
+    }
+
+    private fun pollForTargetActive(
+        targetPackage: String,
+        attemptsLeft: Int,
+        onResult: (Boolean) -> Unit
+    ) {
+        if (attemptsLeft <= 0) {
+            android.util.Log.d(
+                "ScannerAccessibilityService",
+                "ensureTarget: poll exhausted for $targetPackage; final windows=${debugActiveWindows()}"
+            )
+            onResult(false)
+            return
+        }
+        if (isTargetWindowActive(targetPackage)) {
+            android.util.Log.d(
+                "ScannerAccessibilityService",
+                "ensureTarget: $targetPackage active after ${(15 - attemptsLeft) * 200}ms"
+            )
+            onResult(true)
+            return
+        }
+        mainHandler.postDelayed({
+            pollForTargetActive(targetPackage, attemptsLeft - 1, onResult)
+        }, 200L)
     }
 
     fun cancelOngoingSewInput(message: String = "Отменено") {
@@ -417,13 +521,15 @@ class ScannerAccessibilityService : AccessibilityService() {
 
     private fun step1FindWindow(
         calibration: SewCalibration,
+        targetPackage: String?,
         testMode: Boolean,
         effectiveBarcode: String,
         onResult: SewInputCallback,
         onStep: SewStepCallback?
     ) {
         armWatchdog(onResult)
-        val immediate = findTargetWindow(calibration.targetPackage)
+        logWindowsSnapshot("step1.immediate", targetPackage)
+        val immediate = findTargetWindow(targetPackage)
         if (immediate != null) {
             onStep?.invoke("SEW найден", true, null)
             armWatchdog(onResult)
@@ -433,17 +539,78 @@ class ScannerAccessibilityService : AccessibilityService() {
             }, 1000L)
             return
         }
-        pollForTargetWindow(calibration, testMode, effectiveBarcode, onResult, onStep, attemptsLeft = 30)
+        pollForTargetWindow(calibration, targetPackage, testMode, effectiveBarcode, onResult, onStep, attemptsLeft = 30)
     }
 
-    private fun findTargetWindow(targetPackage: String): AccessibilityWindowInfo? {
-        return windows.firstOrNull {
+    private fun findTargetWindow(targetPackage: String?): AccessibilityWindowInfo? {
+        val byPreferred = if (targetPackage.isNullOrEmpty()) null else windows.firstOrNull {
             it.root?.packageName == targetPackage && it.isActive
         }
+        if (byPreferred != null) {
+            if (lastEffectiveTarget != targetPackage) lastEffectiveTarget = targetPackage ?: ""
+            return byPreferred
+        }
+        val byFallback = windows.firstOrNull { w ->
+            w.isActive && SupportedBrowsers.SUPPORTED_PACKAGES.contains(w.root?.packageName?.toString())
+        }
+        if (byFallback != null) {
+            val actualPkg = byFallback.root?.packageName?.toString() ?: ""
+            if (lastEffectiveTarget != actualPkg) {
+                lastEffectiveTarget = actualPkg
+                if (BuildConfig.DEBUG) android.util.Log.d(
+                    "ScannerAccessibility",
+                    "findTargetWindow: fallback preferred='$targetPackage' → actual='$actualPkg'"
+                )
+            }
+        }
+        return byFallback
+    }
+
+    private fun logWindowsSnapshot(tag: String, targetPackage: String?) {
+        if (!BuildConfig.DEBUG) return
+        val snap = StringBuilder()
+        snap.append("[$tag] target=").append(targetPackage).append(" count=").append(windows.size)
+        for ((i, win) in windows.withIndex()) {
+            val root = win.root
+            val pkg = root?.packageName?.toString() ?: "<null>"
+            val cls = root?.className?.toString() ?: "<null>"
+            snap.append(" | w[").append(i).append("] active=").append(win.isActive)
+                .append(" type=").append(win.type)
+                .append(" pkg=").append(pkg)
+                .append(" cls=").append(cls)
+        }
+        android.util.Log.d("ScannerAccessibility", snap.toString())
+    }
+
+    private fun logEnvironmentSnapshot(
+        tag: String,
+        effectiveTarget: String,
+        detected: String?,
+        calibration: SewCalibration
+    ) {
+        if (!BuildConfig.DEBUG) return
+        val a11yEnabled = try {
+            Settings.Secure.getInt(contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED)
+        } catch (_: Exception) { -1 }
+        val enabledSvcs = try {
+            Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
+        } catch (_: Exception) { "<err>" }
+        val containsOurService = enabledSvcs.contains(packageName)
+        android.util.Log.d(
+            "ScannerAccessibility",
+            "[$tag] device=${Build.BRAND}/${Build.MODEL} sdk=${Build.VERSION.SDK_INT} " +
+                "appPkg=$packageName a11yEnabled=$a11yEnabled ourServiceActive=$containsOurService " +
+                "enabledSvcs=$enabledSvcs " +
+                "effectiveTarget=$effectiveTarget detected=$detected configured=${calibration.targetPackage} " +
+                "isCalibrated=${calibration.isCalibrated} " +
+                "openModal=(${calibration.openModal.x},${calibration.openModal.y}) " +
+                "confirm=(${calibration.confirm.x},${calibration.confirm.y})"
+        )
     }
 
     private fun pollForTargetWindow(
         calibration: SewCalibration,
+        targetPackage: String?,
         testMode: Boolean,
         effectiveBarcode: String,
         onResult: SewInputCallback,
@@ -451,21 +618,23 @@ class ScannerAccessibilityService : AccessibilityService() {
         attemptsLeft: Int
     ) {
         if (attemptsLeft <= 0) {
+            logWindowsSnapshot("step1.poll.exhausted", targetPackage)
             val activePkgs = windows.filter { it.isActive }
                 .mapNotNull { it.root?.packageName?.toString() }
                 .distinct()
                 .joinToString(", ")
             val msg = if (activePkgs.isBlank()) {
-                "Окно ${calibration.targetPackage} не появилось"
+                "Окно $targetPackage не появилось"
             } else {
-                "Окно ${calibration.targetPackage} не найдено. Активные: $activePkgs"
+                "Окно $targetPackage не найдено. Активные: $activePkgs"
             }
             releaseWatchdogAndFinish(onResult, false, msg)
             return
         }
         mainHandler.postDelayed({
-            val t = findTargetWindow(calibration.targetPackage)
+            val t = findTargetWindow(targetPackage)
             if (t != null) {
+                logWindowsSnapshot("step1.poll.found", targetPackage)
                 onStep?.invoke("SEW найден", true, null)
                 armWatchdog(onResult)
                 mainHandler.postDelayed({
@@ -473,7 +642,21 @@ class ScannerAccessibilityService : AccessibilityService() {
                     step2ClickOpenModal(calibration, testMode, effectiveBarcode, onResult, onStep)
                 }, 1000L)
             } else {
-                pollForTargetWindow(calibration, testMode, effectiveBarcode, onResult, onStep, attemptsLeft - 1)
+                if (attemptsLeft == 30 || attemptsLeft % 10 == 0) {
+                    logWindowsSnapshot("step1.poll.tick$attemptsLeft", targetPackage)
+                }
+                if (BuildConfig.DEBUG && (attemptsLeft == 25 || attemptsLeft == 15 || attemptsLeft == 5)) {
+                    val activeDetails = windows.filter { it.isActive }.joinToString("; ") { w ->
+                        val pkg = w.root?.packageName?.toString() ?: "<null>"
+                        val cls = w.root?.className?.toString()?.substringAfterLast('.') ?: "<null>"
+                        "type=${w.type} pkg=$pkg cls=$cls"
+                    }
+                    android.util.Log.d(
+                        "ScannerAccessibility",
+                        "[step1.poll.detail.t$attemptsLeft] activeWindows=$activeDetails"
+                    )
+                }
+                pollForTargetWindow(calibration, targetPackage, testMode, effectiveBarcode, onResult, onStep, attemptsLeft - 1)
             }
         }, 300L)
     }
@@ -485,6 +668,13 @@ class ScannerAccessibilityService : AccessibilityService() {
         onResult: SewInputCallback,
         onStep: SewStepCallback?
     ) {
+        if (BuildConfig.DEBUG) {
+            android.util.Log.d(
+                "ScannerAccessibility",
+                "[step2.beforeTap] target=$lastEffectiveTarget coords=(${calibration.openModal.x},${calibration.openModal.y})"
+            )
+            logWindowsSnapshot("step2.beforeTap", lastEffectiveTarget)
+        }
         tryOpenModal(calibration, calibration.openModal, testMode, effectiveBarcode, onResult, onStep, attemptsLeft = 3)
     }
 
@@ -523,9 +713,18 @@ class ScannerAccessibilityService : AccessibilityService() {
             releaseWatchdogAndFinish(onResult, false, msg)
             return
         }
+        if (BuildConfig.DEBUG) logWindowsSnapshot("step2.afterTap.attempts${3 - attemptsLeft + 1}", lastEffectiveTarget)
         mainHandler.postDelayed({
             armWatchdog(onResult)
             val input = findInputFieldAcrossWindows()
+            if (BuildConfig.DEBUG) {
+                val found = input != null
+                val pkg = input?.packageName?.toString() ?: "<null>"
+                android.util.Log.d(
+                    "ScannerAccessibility",
+                    "[step2.findInput] found=$found pkg=$pkg attemptsLeft=$attemptsLeft"
+                )
+            }
             if (input != null) {
                 input.safeRecycle()
                 onStep?.invoke("Кнопка «Ручной ввод» доступна", true, null)
@@ -533,6 +732,7 @@ class ScannerAccessibilityService : AccessibilityService() {
             } else if (attemptsLeft > 1) {
                 tryOpenModal(calibration, point, testMode, effectiveBarcode, onResult, onStep, attemptsLeft - 1)
             } else {
+                if (BuildConfig.DEBUG) logWindowsSnapshot("step2.noModalAfter3Taps", lastEffectiveTarget)
                 val msg = "Модалка не открылась после 3 тапов (${point.x}, ${point.y})"
                 onStep?.invoke("Кнопка «Ручной ввод» доступна", false, msg)
                 releaseWatchdogAndFinish(onResult, false, msg)
@@ -636,13 +836,16 @@ class ScannerAccessibilityService : AccessibilityService() {
         }
         inputNode.refresh()
         val ok = inputNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "step4SetText: ACTION_SET_TEXT ok=$ok pkg=${inputNode.packageName} text='$barcode' editable=${inputNode.isEditable} focused=${inputNode.isFocused}")
         if (!ok) {
+            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "step4SetText: SET_TEXT FAILED, using clipboard fallback")
             val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
             val original = clipboard.primaryClip
             pendingClipboardRestore = original
             clipboard.setPrimaryClip(ClipData.newPlainText("barcode", barcode))
             inputNode.refresh()
-            inputNode.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            val focusOk = inputNode.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "step4SetText: ACTION_FOCUS ok=$focusOk")
             mainHandler.postDelayed({
                 inputNode.safeRecycle()
                 val pasted = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)

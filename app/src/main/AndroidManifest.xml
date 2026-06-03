@@ -51,7 +51,6 @@
             android:exported="false"
             android:excludeFromRecents="true"
             android:taskAffinity=""
-            android:noHistory="true"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
             android:theme="@style/Theme.ScannerOverlay.Transparent" />

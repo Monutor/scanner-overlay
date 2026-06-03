@@ -1,7 +1,6 @@
 package com.scanner.overlay.overlay
 
 import android.Manifest
-import android.content.Intent
 import android.content.pm.PackageManager
 
 import android.os.Build
@@ -66,6 +65,7 @@ import com.scanner.overlay.scanner.BarcodeDatabase
 import com.scanner.overlay.scanner.BarcodeLookupResult
 import com.scanner.overlay.scanner.ScannerResult
 import com.scanner.overlay.scanner.WarehouseItem
+import com.scanner.overlay.util.toastAtBottom
 
 @AndroidEntryPoint
 class OverlayActivity : ComponentActivity() {
@@ -79,8 +79,6 @@ class OverlayActivity : ComponentActivity() {
     @Volatile private var pendingBarcode: String? = null
     @Volatile private var injectionAttempted = false
 
-    @javax.inject.Inject lateinit var sewCalibration: SewCalibration
-
     private val isSubmittingToSew = mutableStateOf(false)
 
     private val finishRunnable = Runnable {
@@ -89,11 +87,11 @@ class OverlayActivity : ComponentActivity() {
             val barcode = pendingBarcode
             if (!isFinishing && barcode != null && !injectionAttempted) {
                 injectionAttempted = true
-                if (sewCalibration.isCalibrated) {
+                if (buildSewCalibration().isCalibrated) {
                     triggerSewAutoInput(barcode)
                 } else {
                     android.util.Log.d("OverlayActivity", "SEW not calibrated, falling back to autoInjectText")
-                    Toast.makeText(this, "Сделайте калибровку SEW", Toast.LENGTH_SHORT).show()
+                    toastAtBottom("Сделайте калибровку SEW")
                     val service = ScannerAccessibilityService.instance
                     if (service?.autoInjectText(barcode) != true) {
                         service?.injectText(barcode)
@@ -109,45 +107,42 @@ class OverlayActivity : ComponentActivity() {
         }
     }
 
+    private fun buildSewCalibration(): SewCalibration {
+        return SewCalibration(
+            targetPackage = prefs.getString("sew_target_package", "") ?: "",
+            openModal = android.graphics.Point(
+                prefs.getInt("sew_open_modal_x", 0),
+                prefs.getInt("sew_open_modal_y", 0)
+            ),
+            confirm = android.graphics.Point(
+                prefs.getInt("sew_confirm_x", 0),
+                prefs.getInt("sew_confirm_y", 0)
+            )
+        )
+    }
+
     private fun triggerSewAutoInput(barcode: String) {
         isSubmittingToSew.value = true
-        val targetPkg = sewCalibration.targetPackage
+        val cal = buildSewCalibration()
         android.util.Log.d(
             "OverlayActivity",
-            "triggerSewAutoInput: barcode=$barcode pkg=$targetPkg isCalibrated=${sewCalibration.isCalibrated} " +
-                "openModal=(${sewCalibration.openModal.x},${sewCalibration.openModal.y}) " +
-                "confirm=(${sewCalibration.confirm.x},${sewCalibration.confirm.y})"
+            "triggerSewAutoInput: barcode=$barcode pkg=${cal.targetPackage} isCalibrated=${cal.isCalibrated} " +
+                "openModal=(${cal.openModal.x},${cal.openModal.y}) " +
+                "confirm=(${cal.confirm.x},${cal.confirm.y})"
         )
         val service = ScannerAccessibilityService.instance
         if (service == null) {
             android.util.Log.w("OverlayActivity", "Accessibility service not running, falling back")
-            Toast.makeText(this, "Сервис доступности не запущен", Toast.LENGTH_SHORT).show()
+            toastAtBottom("Сервис доступности не запущен")
             if (!isFinishing) finish()
             return
         }
-        if (targetPkg.isNotEmpty() && !service.isTargetWindowActive(targetPkg)) {
-            val launchIntent = packageManager.getLaunchIntentForPackage(targetPkg)
-            if (launchIntent != null) {
-                launchIntent.addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                )
-                try {
-                    startActivity(launchIntent)
-                    android.util.Log.d("OverlayActivity", "triggerSewAutoInput: reordered $targetPkg to front (no reload)")
-                } catch (e: Exception) {
-                    android.util.Log.w("OverlayActivity", "Failed to bring $targetPkg to front", e)
-                }
-            }
-        } else if (targetPkg.isNotEmpty()) {
-            android.util.Log.d("OverlayActivity", "triggerSewAutoInput: $targetPkg already active, no launch needed")
-        }
+        if (!isFinishing) finish()
         service.runSewAutoInput(
             barcode = barcode,
-            calibration = sewCalibration,
+            calibration = cal,
             onResult = { ok, message -> onSewInputResult(ok, message) }
         )
-        if (!isFinishing) finish()
     }
 
     private fun onSewInputResult(ok: Boolean, message: String) {
@@ -188,7 +183,7 @@ class OverlayActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (!granted) {
-            Toast.makeText(this, R.string.camera_unavailable, Toast.LENGTH_LONG).show()
+            toastAtBottom(getString(R.string.camera_unavailable), Toast.LENGTH_LONG)
             finish()
         }
     }

@@ -21,6 +21,8 @@ import android.widget.FrameLayout
 import android.widget.Toast
 import com.scanner.overlay.R
 import com.scanner.overlay.MainActivity
+import com.scanner.overlay.util.reusableBottomToast
+import com.scanner.overlay.util.toastAtBottom
 
 class SewCalibrationService : Service() {
 
@@ -52,7 +54,7 @@ class SewCalibrationService : Service() {
         prefs = getSharedPreferences("scanner_prefs", MODE_PRIVATE)
         prefs?.edit()?.putBoolean(PREF_KEY_AWAITING, true)?.apply()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        countdownToast = Toast.makeText(this, "", Toast.LENGTH_SHORT)
+        countdownToast = reusableBottomToast(this)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID,
@@ -97,11 +99,7 @@ class SewCalibrationService : Service() {
         windowManager.addView(overlayView, params)
         updateNotification(stepIndex = 0)
         mainHandler.post {
-            Toast.makeText(
-                this,
-                "Оверлей активен — тапните на «Ручной ввод»",
-                Toast.LENGTH_SHORT
-            ).show()
+            toastAtBottom("Оверлей активен — тапните на «Ручной ввод»")
         }
     }
 
@@ -109,11 +107,10 @@ class SewCalibrationService : Service() {
         val knownPkg = prefs?.getString("sew_target_package", "") ?: ""
         if (knownPkg.isEmpty()) {
             mainHandler.post {
-                Toast.makeText(
-                    this,
+                toastAtBottom(
                     "Сначала выберите приложение SEW в настройках",
                     Toast.LENGTH_LONG
-                ).show()
+                )
             }
             mainHandler.postDelayed({ stopSelf() }, 1500L)
             return
@@ -129,11 +126,10 @@ class SewCalibrationService : Service() {
                 ?.apply()
             updateNotification(stepIndex = 1)
             mainHandler.post {
-                Toast.makeText(
-                    this,
+                toastAtBottom(
                     "Шаг 1 сохранён. Откройте модалку вручную и нажмите на «Готово».",
                     Toast.LENGTH_LONG
-                ).show()
+                )
             }
         } else {
             prefs?.edit()
@@ -141,11 +137,9 @@ class SewCalibrationService : Service() {
                 ?.putInt("sew_confirm_y", y)
                 ?.apply()
             mainHandler.post {
-                Toast.makeText(
-                    this,
-                    "Калибровка сохранена: $capturedPackage (open=$openModalX,$openModalY confirm=$x,$y)",
-                    Toast.LENGTH_SHORT
-                ).show()
+                toastAtBottom(
+                    "Калибровка сохранена: $capturedPackage (open=$openModalX,$openModalY confirm=$x,$y)"
+                )
             }
             mainHandler.postDelayed({ stopSelf() }, 1500L)
         }

@@ -8,8 +8,7 @@ data class SewCalibration(
     val confirm: Point
 ) {
     val isCalibrated: Boolean
-        get() = targetPackage.isNotEmpty() &&
-            openModal.x > 0 && openModal.y > 0 &&
+        get() = openModal.x > 0 && openModal.y > 0 &&
             confirm.x > 0 && confirm.y > 0
 
     companion object {
