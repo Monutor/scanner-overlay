@@ -18,6 +18,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.TextView
 import android.widget.Toast
 import com.scanner.overlay.R
 import com.scanner.overlay.MainActivity
@@ -36,7 +37,7 @@ class SewCalibrationService : Service() {
         private var remaining = (STARTUP_DELAY_MS / 1000L).toInt()
         override fun run() {
             if (remaining <= 0) return
-            countdownToast.setText("Оверлей через $remaining сек")
+            countdownToast.setText("Оверлей через $remaining сек • Заранее откройте модалку ручного ввода")
             countdownToast.cancel()
             countdownToast.show()
             remaining--
@@ -47,6 +48,7 @@ class SewCalibrationService : Service() {
     private var openModalX = 0
     private var openModalY = 0
     private var capturedPackage: String = ""
+    private var statusText: TextView? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -82,6 +84,16 @@ class SewCalibrationService : Service() {
             gravity = Gravity.TOP or Gravity.START
         }
 
+        val statusLabel = TextView(this).apply {
+            text = "Шаг 1: тапните на «Ручной ввод»"
+            setTextColor(android.graphics.Color.WHITE)
+            textSize = 15f
+            gravity = Gravity.CENTER
+            setBackgroundColor(0xCC000000.toInt())
+            setPadding(32, 14, 32, 14)
+        }
+        statusText = statusLabel
+
         overlayView = FrameLayout(this).apply {
             setBackgroundColor(0x33000000)
             isClickable = false
@@ -94,13 +106,24 @@ class SewCalibrationService : Service() {
                 }
                 true
             }
+            addView(
+                statusLabel,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                ).apply {
+                    bottomMargin = 48
+                }
+            )
         }
 
         windowManager.addView(overlayView, params)
         updateNotification(stepIndex = 0)
-        mainHandler.post {
-            toastAtBottom("Оверлей активен — тапните на «Ручной ввод»")
-        }
+    }
+
+    private fun updateOverlayStatus(text: String) {
+        mainHandler.post { statusText?.text = text }
     }
 
     private fun handleTap(x: Int, y: Int) {
@@ -125,21 +148,20 @@ class SewCalibrationService : Service() {
                 ?.putInt("sew_open_modal_y", y)
                 ?.apply()
             updateNotification(stepIndex = 1)
+            val msg = "Шаг 2: тапните на «Готово»"
+            updateOverlayStatus(msg)
             mainHandler.post {
-                toastAtBottom(
-                    "Шаг 1 сохранён. Откройте модалку вручную и нажмите на «Готово».",
-                    Toast.LENGTH_LONG
-                )
+                toastAtBottom(msg, Toast.LENGTH_LONG)
             }
         } else {
             prefs?.edit()
                 ?.putInt("sew_confirm_x", x)
                 ?.putInt("sew_confirm_y", y)
                 ?.apply()
+            val msg = "Калибровка сохранена: $capturedPackage"
+            updateOverlayStatus(msg)
             mainHandler.post {
-                toastAtBottom(
-                    "Калибровка сохранена: $capturedPackage (open=$openModalX,$openModalY confirm=$x,$y)"
-                )
+                toastAtBottom(msg)
             }
             mainHandler.postDelayed({ stopSelf() }, 1500L)
         }
@@ -176,9 +198,9 @@ class SewCalibrationService : Service() {
         )
 
         val text = when (stepIndex) {
-            STEP_PREPARING -> "Перейдите в SEW-приложение. Оверлей появится через 5 сек."
+            STEP_PREPARING -> "Перед калибровкой откройте модалку ручного ввода и уберите клавиатуру"
             0 -> "Шаг 1/2: нажмите на «Ручной ввод»"
-            else -> "Шаг 2/2: откройте модалку и нажмите на «Готово»"
+            else -> "Шаг 2/2: нажмите на «Готово»"
         }
         return Notification.Builder(this, channelId)
             .setContentTitle("Калибровка SEW")

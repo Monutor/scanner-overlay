@@ -959,9 +959,16 @@ class ScannerAccessibilityService : AccessibilityService() {
         }
 
         if (testMode) {
-            textNode.safeRecycle()
             onStep?.invoke("Кнопка «Готово» найдена", true, null)
-            releaseWatchdogAndFinish(onResult, true, "Тест пройден")
+            val rect = android.graphics.Rect()
+            textNode.getBoundsInScreen(rect)
+            textNode.safeRecycle()
+            val (tapX, tapY) = if (!rect.isEmpty) {
+                ((rect.left + rect.right) / 2f) to ((rect.top + rect.bottom) / 2f)
+            } else {
+                calibration.confirm.x.toFloat() to calibration.confirm.y.toFloat()
+            }
+            clickConfirmAtCoords(tapX, tapY, onResult, testMode = true)
             return
         }
 
@@ -985,7 +992,8 @@ class ScannerAccessibilityService : AccessibilityService() {
     private fun clickConfirmAtCoords(
         x: Float,
         y: Float,
-        onResult: SewInputCallback
+        onResult: SewInputCallback,
+        testMode: Boolean = false
     ) {
         if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "Готово: tap at ($x, $y)")
         val gesture = GestureDescription.Builder()
@@ -999,6 +1007,10 @@ class ScannerAccessibilityService : AccessibilityService() {
         }
         mainHandler.postDelayed({
             if (!sewInputInProgress) return@postDelayed
+            if (testMode) {
+                releaseWatchdogAndFinish(onResult, true, "Тест пройден")
+                return@postDelayed
+            }
             val stillThere = isButtonStillPresent()
             if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "Готово verify after tap: stillThere=$stillThere")
             if (!stillThere) {
