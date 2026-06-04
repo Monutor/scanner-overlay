@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -85,6 +86,7 @@ fun SettingsScreen(
     val awaitingSewCalibration by viewModel.awaitingSewCalibration.collectAsState()
     val shelfPickerEnabled by viewModel.shelfPickerEnabled.collectAsState()
     val articleLookupEnabled by viewModel.articleLookupEnabled.collectAsState()
+    val tapToFocusEnabled by viewModel.tapToFocusEnabled.collectAsState()
 
     val grantedCount = listOf(cameraGranted, overlayGranted, accessibilityGranted).count { it }
 
@@ -148,6 +150,16 @@ fun SettingsScreen(
                 ScanQualityCard(
                     quality = scanQuality,
                     onQualityChange = { viewModel.updateScanQuality(it) }
+                )
+
+                TapToFocusCard(
+                    enabled = tapToFocusEnabled,
+                    onToggle = { viewModel.setTapToFocusEnabled(it) }
+                )
+
+                TapToFocusCard(
+                    enabled = tapToFocusEnabled,
+                    onToggle = { viewModel.setTapToFocusEnabled(it) }
                 )
 
                 SectionEyebrow("Система")
@@ -538,6 +550,44 @@ private fun ScanQualityCard(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TapToFocusCard(
+    enabled: Boolean,
+    onToggle: (Boolean) -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        )
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            CardHeader(
+                title = "Камера",
+                subtitle = "Поведение при наведении на штрихкод"
+            )
+            FloatingToggleRow(
+                color = BlueFab,
+                icon = Icons.Default.CenterFocusStrong,
+                title = "Тап для фокуса",
+                subtitle = "Коснитесь камеры, чтобы перефокусироваться",
+                checked = enabled,
+                enabled = true,
+                onCheckedChange = onToggle
+            )
+            Column(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    text = "Полезно, когда штрихкод мелкий или бликует — касание принудительно фокусирует камеру на выбранной точке.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }

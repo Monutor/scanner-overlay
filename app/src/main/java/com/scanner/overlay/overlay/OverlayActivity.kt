@@ -9,6 +9,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.media.MediaPlayer
+import android.view.HapticFeedbackConstants
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -16,6 +17,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraControl
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -23,6 +25,7 @@ import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -36,9 +39,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -47,13 +52,20 @@ import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.activity.compose.BackHandler
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.Lifecycle
 import dagger.hilt.android.AndroidEntryPoint
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import androidx.compose.runtime.DisposableEffect
 import com.scanner.overlay.R
@@ -201,6 +213,15 @@ class OverlayActivity : ComponentActivity() {
         checkCameraPermission()
         BarcodeDatabase.init(this)
 
+        if (prefs.getBoolean("tap_to_focus_enabled", true) &&
+            !prefs.getBoolean("focus_hint_shown", false)
+        ) {
+            toastAtBottom("Тап по камеру для фокуса")
+            prefs.edit().putBoolean("focus_hint_shown", true).apply()
+        }
+
+        val tapToFocusEnabled = prefs.getBoolean("tap_to_focus_enabled", true)
+
         setContent {
             val viewModel = hiltViewModel<OverlayViewModel>()
             MaterialTheme {
@@ -238,7 +259,8 @@ class OverlayActivity : ComponentActivity() {
                         },
                         onCancelFinish = { cancelFinish() },
                         onRequestInputFocus = { requestInputFocus() },
-                        onReleaseInputFocus = { releaseInputFocus() }
+                        onReleaseInputFocus = { releaseInputFocus() },
+                        tapToFocusEnabled = tapToFocusEnabled
                     )
                 }
             }
@@ -360,7 +382,8 @@ fun OverlayContent(
     onRetry: () -> Unit = {},
     onCancelFinish: () -> Unit = {},
     onRequestInputFocus: () -> Unit = {},
-    onReleaseInputFocus: () -> Unit = {}
+    onReleaseInputFocus: () -> Unit = {},
+    tapToFocusEnabled: Boolean = true
 ) {
     val state by viewModel.state.collectAsState()
     val isTimedOut by viewModel.isScanTimedOut.collectAsState()
@@ -369,6 +392,10 @@ fun OverlayContent(
     var showManualInput by remember { mutableStateOf(false) }
     var torchOn by remember { mutableStateOf(false) }
     var detectedBarcode by remember { mutableStateOf(false) }
+    var cameraControl by remember { mutableStateOf<CameraControl?>(null) }
+    var previewView by remember { mutableStateOf<PreviewView?>(null) }
+    var focusPoint by remember { mutableStateOf<Offset?>(null) }
+    var focusSuccess by remember { mutableStateOf<Boolean?>(null) }
     val coroutineScope = rememberCoroutineScope()
     val isSubmitting by isSubmittingToSew
 
@@ -411,9 +438,36 @@ fun OverlayContent(
                     .size(300.dp)
                     .clip(RoundedCornerShape(16.dp))
                     .border(1.dp, Color(0x1AFFFFFF), RoundedCornerShape(16.dp))
+                    .pointerInput(state, tapToFocusEnabled) {
+                        detectTapGestures { offset ->
+                            if (!tapToFocusEnabled) return@detectTapGestures
+                            if (state !is OverlayViewModel.OverlayState.Scanning) return@detectTapGestures
+                            val control = cameraControl ?: return@detectTapGestures
+                            val view = previewView ?: return@detectTapGestures
+                            val factory = view.meteringPointFactory
+                            val point = factory.createPoint(offset.x, offset.y)
+                            val action = FocusMeteringAction.Builder(
+                                point,
+                                FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE
+                            ).setAutoCancelDuration(3, TimeUnit.SECONDS).build()
+                            focusSuccess = null
+                            focusPoint = offset
+                            val executor = ContextCompat.getMainExecutor(view.context)
+                            val future = control.startFocusAndMetering(action)
+                            future.addListener({
+                                runCatching { future.get() }.onSuccess { result ->
+                                    focusSuccess = result.isFocusSuccessful
+                                }
+                            }, executor)
+                        }
+                    }
             ) {
                     CameraPreview(
                     torchOn = torchOn,
+                    onCameraReady = { control, view ->
+                        cameraControl = control
+                        previewView = view
+                    },
                             onBarcodeScanned = { result ->
                                 try {
                                     if (showManualInput) {
@@ -495,6 +549,8 @@ fun OverlayContent(
                             )
                     )
                 }
+
+                FocusIndicator(point = focusPoint, success = focusSuccess)
             }
             // Text + buttons (only during active scanning)
             if (state !is OverlayViewModel.OverlayState.Success
@@ -891,6 +947,7 @@ fun CameraPreview(
     onShowManualInput: ((String) -> Unit)? = null,
     onCancelFinish: () -> Unit = {},
     resetScanCompleted: Boolean = false,
+    onCameraReady: (CameraControl, PreviewView) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -989,6 +1046,7 @@ fun CameraPreview(
                         imageAnalysis
                     )
                     cameraControl.value = camera.cameraControl
+                    onCameraReady(camera.cameraControl, previewView)
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
@@ -997,6 +1055,52 @@ fun CameraPreview(
             previewView
         },
         modifier = modifier
+    )
+}
+
+@Composable
+private fun BoxScope.FocusIndicator(point: Offset?, success: Boolean?) {
+    val currentPoint = point ?: return
+    val alpha = remember { Animatable(0f) }
+    val scale = remember { Animatable(1.3f) }
+    val view = LocalView.current
+    val density = LocalDensity.current
+    val ringSize = 80.dp
+    val ringSizePx = with(density) { ringSize.toPx() }
+
+    LaunchedEffect(currentPoint) {
+        alpha.snapTo(0f)
+        scale.snapTo(1.3f)
+        launch { alpha.animateTo(1f, tween(80)) }
+        launch { scale.animateTo(1f, tween(150)) }
+    }
+
+    LaunchedEffect(success, currentPoint) {
+        if (success == true) {
+            view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+        }
+        kotlinx.coroutines.delay(1000)
+        alpha.animateTo(0f, tween(600))
+    }
+
+    val color = if (success == false) Color(0xFFFF5252) else Color(0xFFFFD600)
+
+    Box(
+        modifier = Modifier
+            .size(ringSize)
+            .align(Alignment.TopStart)
+            .offset {
+                IntOffset(
+                    (currentPoint.x - ringSizePx / 2f).toInt(),
+                    (currentPoint.y - ringSizePx / 2f).toInt()
+                )
+            }
+            .graphicsLayer {
+                scaleX = scale.value
+                scaleY = scale.value
+                this.alpha = alpha.value
+            }
+            .border(2.dp, color, CircleShape)
     )
 }
 

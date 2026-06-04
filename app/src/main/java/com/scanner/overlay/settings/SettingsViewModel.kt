@@ -56,6 +56,8 @@ class SettingsViewModel @Inject constructor(
         private const val PREF_KEY_SEW_CONFIRM_Y = "sew_confirm_y"
         const val PREF_KEY_SHELF_PICKER_ENABLED = "shelf_picker_enabled"
         const val PREF_KEY_ARTICLE_LOOKUP_ENABLED = "article_lookup_enabled"
+        const val PREF_KEY_TAP_TO_FOCUS_ENABLED = "tap_to_focus_enabled"
+        const val PREF_KEY_FOCUS_HINT_SHOWN = "focus_hint_shown"
     }
 
     private val _isFloatingButtonEnabled = MutableStateFlow(false)
@@ -69,6 +71,11 @@ class SettingsViewModel @Inject constructor(
         prefs.getBoolean(PREF_KEY_ARTICLE_LOOKUP_ENABLED, false)
     )
     val articleLookupEnabled: StateFlow<Boolean> = _articleLookupEnabled.asStateFlow()
+
+    private val _tapToFocusEnabled = MutableStateFlow(
+        prefs.getBoolean(PREF_KEY_TAP_TO_FOCUS_ENABLED, true)
+    )
+    val tapToFocusEnabled: StateFlow<Boolean> = _tapToFocusEnabled.asStateFlow()
 
     private val _scanTimeoutMs = MutableStateFlow(prefs.getLong(PREF_KEY_SCAN_TIMEOUT, 45_000L))
     val scanTimeoutMs: StateFlow<Long> = _scanTimeoutMs.asStateFlow()
@@ -214,6 +221,19 @@ class SettingsViewModel @Inject constructor(
         if (_articleLookupEnabled.value == enabled) return
         _articleLookupEnabled.value = enabled
         prefs.edit().putBoolean(PREF_KEY_ARTICLE_LOOKUP_ENABLED, enabled).apply()
+    }
+
+    fun setTapToFocusEnabled(enabled: Boolean) {
+        if (_tapToFocusEnabled.value == enabled) return
+        _tapToFocusEnabled.value = enabled
+        prefs.edit().putBoolean(PREF_KEY_TAP_TO_FOCUS_ENABLED, enabled).apply()
+    }
+
+    fun wasFocusHintShown(): Boolean =
+        prefs.getBoolean(PREF_KEY_FOCUS_HINT_SHOWN, false)
+
+    fun markFocusHintShown() {
+        prefs.edit().putBoolean(PREF_KEY_FOCUS_HINT_SHOWN, true).apply()
     }
 
     fun resetSewCalibration() {
