@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Scanner Overlay</string>
+    <string name="app_name">SEW-Помощник</string>
     <string name="channel_name">Сканер</string>
     <string name="channel_description">Уведомления сервиса сканирования</string>
     <string name="notification_title">Сканер готов</string>

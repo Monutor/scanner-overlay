@@ -36,9 +36,11 @@ class ScannerForegroundService : Service() {
 
     private lateinit var floatingButton: FloatingScanButton
     private lateinit var shelfPickerButton: ShelfPickerButton
+    private lateinit var articleLookupButton: ArticleLookupButton
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var shelfObserverJob: Job? = null
+    private var articleObserverJob: Job? = null
 
     companion object {
         private const val PREF_KEY_SERVICE_RUNNING = "service_running"
@@ -47,6 +49,7 @@ class ScannerForegroundService : Service() {
         const val ACTION_START = "com.scanner.overlay.START"
         const val ACTION_STOP = "com.scanner.overlay.STOP"
         const val PREF_KEY_SHELF_PICKER_ENABLED = "shelf_picker_enabled"
+        const val PREF_KEY_ARTICLE_LOOKUP_ENABLED = "article_lookup_enabled"
         @Volatile
         var isRunning: Boolean = false
             private set
@@ -59,6 +62,7 @@ class ScannerForegroundService : Service() {
         createNotificationChannel()
         floatingButton = FloatingScanButton(this, prefs)
         shelfPickerButton = ShelfPickerButton(this, prefs)
+        articleLookupButton = ArticleLookupButton(this, prefs)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID,
@@ -69,6 +73,7 @@ class ScannerForegroundService : Service() {
             startForeground(NOTIFICATION_ID, createNotification())
         }
         startShelfPickerObserver()
+        startArticleLookupObserver()
     }
 
     override fun onDestroy() {
@@ -76,6 +81,7 @@ class ScannerForegroundService : Service() {
         isRunning = false
         floatingButton.hide()
         shelfPickerButton.hide()
+        articleLookupButton.hide()
         prefs.edit().putBoolean(PREF_KEY_SERVICE_RUNNING, false).apply()
         serviceScope.cancel()
     }
@@ -113,6 +119,15 @@ class ScannerForegroundService : Service() {
         }
     }
 
+    private fun startArticleLookupObserver() {
+        articleObserverJob?.cancel()
+        articleObserverJob = serviceScope.launch {
+            articleLookupEnabledFlow().collectLatest { enabled ->
+                if (enabled) articleLookupButton.show() else articleLookupButton.hide()
+            }
+        }
+    }
+
     private fun shelfPickerEnabledFlow() = callbackFlow {
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
             if (key == PREF_KEY_SHELF_PICKER_ENABLED) {
@@ -121,6 +136,17 @@ class ScannerForegroundService : Service() {
         }
         prefs.registerOnSharedPreferenceChangeListener(listener)
         trySend(prefs.getBoolean(PREF_KEY_SHELF_PICKER_ENABLED, false))
+        awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }.distinctUntilChanged()
+
+    private fun articleLookupEnabledFlow() = callbackFlow {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == PREF_KEY_ARTICLE_LOOKUP_ENABLED) {
+                trySend(prefs.getBoolean(PREF_KEY_ARTICLE_LOOKUP_ENABLED, false))
+            }
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        trySend(prefs.getBoolean(PREF_KEY_ARTICLE_LOOKUP_ENABLED, false))
         awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }.distinctUntilChanged()
 

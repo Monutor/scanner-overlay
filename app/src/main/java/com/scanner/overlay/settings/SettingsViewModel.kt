@@ -55,6 +55,7 @@ class SettingsViewModel @Inject constructor(
         private const val PREF_KEY_SEW_CONFIRM_X = "sew_confirm_x"
         private const val PREF_KEY_SEW_CONFIRM_Y = "sew_confirm_y"
         const val PREF_KEY_SHELF_PICKER_ENABLED = "shelf_picker_enabled"
+        const val PREF_KEY_ARTICLE_LOOKUP_ENABLED = "article_lookup_enabled"
     }
 
     private val _isFloatingButtonEnabled = MutableStateFlow(false)
@@ -63,6 +64,11 @@ class SettingsViewModel @Inject constructor(
         prefs.getBoolean(PREF_KEY_SHELF_PICKER_ENABLED, false)
     )
     val shelfPickerEnabled: StateFlow<Boolean> = _shelfPickerEnabled.asStateFlow()
+
+    private val _articleLookupEnabled = MutableStateFlow(
+        prefs.getBoolean(PREF_KEY_ARTICLE_LOOKUP_ENABLED, false)
+    )
+    val articleLookupEnabled: StateFlow<Boolean> = _articleLookupEnabled.asStateFlow()
 
     private val _scanTimeoutMs = MutableStateFlow(prefs.getLong(PREF_KEY_SCAN_TIMEOUT, 45_000L))
     val scanTimeoutMs: StateFlow<Long> = _scanTimeoutMs.asStateFlow()
@@ -202,6 +208,12 @@ class SettingsViewModel @Inject constructor(
         if (_shelfPickerEnabled.value == enabled) return
         _shelfPickerEnabled.value = enabled
         prefs.edit().putBoolean(PREF_KEY_SHELF_PICKER_ENABLED, enabled).apply()
+    }
+
+    fun setArticleLookupEnabled(enabled: Boolean) {
+        if (_articleLookupEnabled.value == enabled) return
+        _articleLookupEnabled.value = enabled
+        prefs.edit().putBoolean(PREF_KEY_ARTICLE_LOOKUP_ENABLED, enabled).apply()
     }
 
     fun resetSewCalibration() {

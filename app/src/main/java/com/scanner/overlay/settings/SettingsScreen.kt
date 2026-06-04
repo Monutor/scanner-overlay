@@ -39,6 +39,7 @@ import com.scanner.overlay.update.UpdateInfo
 
 private val BlueFab = Color(0xFF1976D2)
 private val OrangeFab = Color(0xFFFB8C00)
+private val GreenFab = Color(0xFF388E3C)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -83,6 +84,7 @@ fun SettingsScreen(
     val sewTestResult by viewModel.sewTestResult.collectAsState()
     val awaitingSewCalibration by viewModel.awaitingSewCalibration.collectAsState()
     val shelfPickerEnabled by viewModel.shelfPickerEnabled.collectAsState()
+    val articleLookupEnabled by viewModel.articleLookupEnabled.collectAsState()
 
     val grantedCount = listOf(cameraGranted, overlayGranted, accessibilityGranted).count { it }
 
@@ -130,8 +132,10 @@ fun SettingsScreen(
                     isFloatingButtonEnabled = isFloatingButtonEnabled,
                     isShelfPickerEnabled = shelfPickerEnabled,
                     isShelfPickerAvailable = isFloatingButtonEnabled && sewCalibration.isCalibrated,
+                    isArticleLookupEnabled = articleLookupEnabled,
                     onToggleFloatingButton = { viewModel.toggleService() },
-                    onToggleShelfPicker = { viewModel.setShelfPickerEnabled(it) }
+                    onToggleShelfPicker = { viewModel.setShelfPickerEnabled(it) },
+                    onToggleArticleLookup = { viewModel.setArticleLookupEnabled(it) }
                 )
 
                 SectionEyebrow("Сканирование")
@@ -318,8 +322,10 @@ private fun FloatingButtonsCard(
     isFloatingButtonEnabled: Boolean,
     isShelfPickerEnabled: Boolean,
     isShelfPickerAvailable: Boolean,
+    isArticleLookupEnabled: Boolean,
     onToggleFloatingButton: () -> Unit,
-    onToggleShelfPicker: (Boolean) -> Unit
+    onToggleShelfPicker: (Boolean) -> Unit,
+    onToggleArticleLookup: (Boolean) -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -360,6 +366,29 @@ private fun FloatingButtonsCard(
                 Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                     Text(
                         text = "Открывает список полок с поиском. Выбор автоматически вводит штрих в SEW — удобно, когда в задании указана конкретная ячейка. Если ячейка не указана («любая полка в зоне»), отсканируйте штрих вручную как обычно.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            DividerRow()
+            FloatingToggleRow(
+                color = GreenFab,
+                icon = Icons.Default.Refresh,
+                title = "Поиск товаров по SKU",
+                subtitle = when {
+                    !isFloatingButtonEnabled -> "Сначала включите «Сканер»"
+                    isArticleLookupEnabled -> "Зелёная кнопка — поиск товаров по SKU"
+                    else -> "Зелёная кнопка скрыта"
+                },
+                checked = isArticleLookupEnabled,
+                enabled = isFloatingButtonEnabled,
+                onCheckedChange = onToggleArticleLookup
+            )
+            if (isFloatingButtonEnabled) {
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    Text(
+                        text = "Открывает экран поиска товара по SKU, когда по названию или модели непонятно что и как выглядит",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

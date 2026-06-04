@@ -46,12 +46,14 @@ Android-приложение для сканирования штрихкодо�
 | `service/ScannerForegroundService.kt` | Persistent notification + владелец FloatingScanButton |
 | `service/FloatingScanButton.kt` | WindowManager overlay-кнопка (drag, tap → OverlayActivity) |
 | `service/ShelfPickerButton.kt` | Оранжевая кнопка выбора полки (drag, tap → ShelfPickerActivity) |
+| `service/ArticleLookupButton.kt` | Зелёная кнопка поиска по артикулу М.Видео (drag, tap → ArticleLookupActivity) |
 | `service/SewCalibrationService.kt` | 2-tap калибровка через overlay (шаги внизу на экране) |
 | `calibration/SewCalibration.kt` | Data class: `targetPackage` + 2 click points |
 | `calibration/SupportedBrowsers.kt` | Детекция Yandex/Chrome/Brave/Edge для SEW |
 | `settings/SewTestResult.kt` | DTO для пошагового теста калибровки |
 | `settings/AppInfo.kt` | DTO: `packageName` + `label` для picker-а приложений |
 | `settings/FavoritesStore.kt` | Избранные полки (max 5, pipe-separated в prefs) |
+| `settings/ArticleLookupActivity.kt` | Прозрачный fullscreen с поиском артикула + WebView (mvideo.ru) |
 | `util/Toasts.kt` | Bottom-aligned toast helpers |
 | `update/AutoUpdateManager.kt` | Скачивание APK с GitHub Releases, FileProvider install |
 | `di/AppModule.kt` | Hilt: только `SharedPreferences` (`"scanner_prefs"`) |
@@ -72,8 +74,11 @@ Android-приложение для сканирования штрихкодо�
 | `scan_quality` | Int (default `1`) | `0`=640×360, `1`=1280×720, `2`=1920×1080 |
 | `floating_button_x/y` | Int | Позиция плавающей кнопки |
 | `shelf_button_x/y` | Int | Позиция кнопки выбора полки |
+| `article_button_x/y` | Int | Позиция зелёной кнопки поиска по артикулу |
+| `last_article_query` | String | Последний введённый артикул (для восстановления в инпуте) |
 | `sew_target_package` | String | package name SEW-приложения |
 | `shelf_picker_enabled` | Boolean | Видимость кнопки выбора полки |
+| `article_lookup_enabled` | Boolean | Видимость зелёной кнопки поиска по артикулу |
 | `favorite_shelves_order` | String | Избранные полки (pipe-separated barcodes) |
 | `sew_open_modal_x/y` | Int | Координаты «Ручной ввод» |
 | `sew_confirm_x/y` | Int | Координаты «Готово» |
