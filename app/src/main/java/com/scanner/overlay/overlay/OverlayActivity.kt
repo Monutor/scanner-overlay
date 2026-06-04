@@ -51,6 +51,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
@@ -221,6 +222,7 @@ class OverlayActivity : ComponentActivity() {
         }
 
         val tapToFocusEnabled = prefs.getBoolean("tap_to_focus_enabled", true)
+        val autoFocusEnabled = prefs.getBoolean("auto_focus_enabled", false)
 
         setContent {
             val viewModel = hiltViewModel<OverlayViewModel>()
@@ -260,7 +262,8 @@ class OverlayActivity : ComponentActivity() {
                         onCancelFinish = { cancelFinish() },
                         onRequestInputFocus = { requestInputFocus() },
                         onReleaseInputFocus = { releaseInputFocus() },
-                        tapToFocusEnabled = tapToFocusEnabled
+                        tapToFocusEnabled = tapToFocusEnabled,
+                        autoFocusEnabled = autoFocusEnabled
                     )
                 }
             }
@@ -383,7 +386,8 @@ fun OverlayContent(
     onCancelFinish: () -> Unit = {},
     onRequestInputFocus: () -> Unit = {},
     onReleaseInputFocus: () -> Unit = {},
-    tapToFocusEnabled: Boolean = true
+    tapToFocusEnabled: Boolean = true,
+    autoFocusEnabled: Boolean = false
 ) {
     val state by viewModel.state.collectAsState()
     val isTimedOut by viewModel.isScanTimedOut.collectAsState()
@@ -401,6 +405,27 @@ fun OverlayContent(
 
     LaunchedEffect(showManualInput) {
         if (showManualInput) onRequestInputFocus() else onReleaseInputFocus()
+    }
+
+    LaunchedEffect(state, autoFocusEnabled, cameraControl, previewView) {
+        if (!autoFocusEnabled) return@LaunchedEffect
+        if (state !is OverlayViewModel.OverlayState.Scanning) return@LaunchedEffect
+        val control = cameraControl ?: return@LaunchedEffect
+        val view = previewView ?: return@LaunchedEffect
+        val factory = view.meteringPointFactory
+        val executor = ContextCompat.getMainExecutor(view.context)
+        while (isActive) {
+            val center = factory.createPoint(view.width / 2f, view.height / 2f)
+            val action = FocusMeteringAction.Builder(
+                center,
+                FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE
+            ).setAutoCancelDuration(3, TimeUnit.SECONDS).build()
+            val future = control.startFocusAndMetering(action)
+            future.addListener({
+                runCatching { future.get() }
+            }, executor)
+            delay(3000)
+        }
     }
 
     BackHandler {

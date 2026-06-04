@@ -58,6 +58,7 @@ class SettingsViewModel @Inject constructor(
         const val PREF_KEY_ARTICLE_LOOKUP_ENABLED = "article_lookup_enabled"
         const val PREF_KEY_TAP_TO_FOCUS_ENABLED = "tap_to_focus_enabled"
         const val PREF_KEY_FOCUS_HINT_SHOWN = "focus_hint_shown"
+        const val PREF_KEY_AUTO_FOCUS_ENABLED = "auto_focus_enabled"
     }
 
     private val _isFloatingButtonEnabled = MutableStateFlow(false)
@@ -76,6 +77,11 @@ class SettingsViewModel @Inject constructor(
         prefs.getBoolean(PREF_KEY_TAP_TO_FOCUS_ENABLED, true)
     )
     val tapToFocusEnabled: StateFlow<Boolean> = _tapToFocusEnabled.asStateFlow()
+
+    private val _autoFocusEnabled = MutableStateFlow(
+        prefs.getBoolean(PREF_KEY_AUTO_FOCUS_ENABLED, false)
+    )
+    val autoFocusEnabled: StateFlow<Boolean> = _autoFocusEnabled.asStateFlow()
 
     private val _scanTimeoutMs = MutableStateFlow(prefs.getLong(PREF_KEY_SCAN_TIMEOUT, 45_000L))
     val scanTimeoutMs: StateFlow<Long> = _scanTimeoutMs.asStateFlow()
@@ -227,6 +233,12 @@ class SettingsViewModel @Inject constructor(
         if (_tapToFocusEnabled.value == enabled) return
         _tapToFocusEnabled.value = enabled
         prefs.edit().putBoolean(PREF_KEY_TAP_TO_FOCUS_ENABLED, enabled).apply()
+    }
+
+    fun setAutoFocusEnabled(enabled: Boolean) {
+        if (_autoFocusEnabled.value == enabled) return
+        _autoFocusEnabled.value = enabled
+        prefs.edit().putBoolean(PREF_KEY_AUTO_FOCUS_ENABLED, enabled).apply()
     }
 
     fun wasFocusHintShown(): Boolean =

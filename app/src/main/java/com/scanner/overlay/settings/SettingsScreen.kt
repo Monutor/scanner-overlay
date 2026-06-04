@@ -87,6 +87,7 @@ fun SettingsScreen(
     val shelfPickerEnabled by viewModel.shelfPickerEnabled.collectAsState()
     val articleLookupEnabled by viewModel.articleLookupEnabled.collectAsState()
     val tapToFocusEnabled by viewModel.tapToFocusEnabled.collectAsState()
+    val autoFocusEnabled by viewModel.autoFocusEnabled.collectAsState()
 
     val grantedCount = listOf(cameraGranted, overlayGranted, accessibilityGranted).count { it }
 
@@ -154,12 +155,9 @@ fun SettingsScreen(
 
                 TapToFocusCard(
                     enabled = tapToFocusEnabled,
-                    onToggle = { viewModel.setTapToFocusEnabled(it) }
-                )
-
-                TapToFocusCard(
-                    enabled = tapToFocusEnabled,
-                    onToggle = { viewModel.setTapToFocusEnabled(it) }
+                    onToggle = { viewModel.setTapToFocusEnabled(it) },
+                    autoFocusEnabled = autoFocusEnabled,
+                    onAutoFocusToggle = { viewModel.setAutoFocusEnabled(it) }
                 )
 
                 SectionEyebrow("Система")
@@ -558,7 +556,9 @@ private fun ScanQualityCard(
 @Composable
 private fun TapToFocusCard(
     enabled: Boolean,
-    onToggle: (Boolean) -> Unit
+    onToggle: (Boolean) -> Unit,
+    autoFocusEnabled: Boolean,
+    onAutoFocusToggle: (Boolean) -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -579,6 +579,15 @@ private fun TapToFocusCard(
                 checked = enabled,
                 enabled = true,
                 onCheckedChange = onToggle
+            )
+            FloatingToggleRow(
+                color = BlueFab,
+                icon = Icons.Default.Refresh,
+                title = "Автофокус каждые 3 сек",
+                subtitle = "Камера перефокусируется автоматически в режиме сканирования",
+                checked = autoFocusEnabled,
+                enabled = enabled,
+                onCheckedChange = onAutoFocusToggle
             )
             Column(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
