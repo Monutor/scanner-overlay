@@ -376,6 +376,15 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun openCameraSettings() {
+        app.startActivity(
+            Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = android.net.Uri.parse("package:${app.packageName}")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        )
+    }
+
     fun openAccessibilitySettings() {
         app.startActivity(
             Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {

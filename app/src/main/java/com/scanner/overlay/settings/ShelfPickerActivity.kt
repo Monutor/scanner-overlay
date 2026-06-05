@@ -1,6 +1,7 @@
 package com.scanner.overlay.settings
 
 import android.os.Bundle
+import android.view.HapticFeedbackConstants
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -39,6 +40,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import com.scanner.overlay.accessibility.ScannerAccessibilityService
 import com.scanner.overlay.calibration.SewCalibration
@@ -174,7 +177,7 @@ private fun ShelfPickerScreen(
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
-                placeholder = { Text("Поиск (например, ПИКАП)") },
+                placeholder = { Text("Поиск") },
                 singleLine = true,
                 leadingIcon = {
                     Icon(imageVector = Icons.Default.Search, contentDescription = null)
@@ -227,7 +230,7 @@ private fun ShelfPickerScreen(
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 480.dp)
+                            .heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.5f).dp)
                     ) {
                         if (favoritesVisible.isNotEmpty()) {
                             item("fav-header") {
@@ -280,12 +283,16 @@ private fun ShelfRow(
     onClick: (WarehouseItem) -> Unit,
     onLongClick: (WarehouseItem) -> Unit
 ) {
+    val view = LocalView.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .combinedClickable(
                 onClick = { onClick(item) },
-                onLongClick = { onLongClick(item) }
+                onLongClick = {
+                    view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    onLongClick(item)
+                }
             )
             .padding(vertical = 10.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically

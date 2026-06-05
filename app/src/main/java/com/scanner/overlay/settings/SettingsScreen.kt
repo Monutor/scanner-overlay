@@ -16,24 +16,35 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CenterFocusStrong
-import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Accessibility
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.FlashOn
+import androidx.compose.material.icons.filled.FormatListBulleted
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.scanner.overlay.R
 import com.scanner.overlay.calibration.SewCalibration
 import com.scanner.overlay.calibration.SupportedBrowsers
 import com.scanner.overlay.update.UpdateInfo
@@ -96,7 +107,7 @@ fun SettingsScreen(
             TopAppBar(
                 title = {
                     Text(
-                        "Scanner Overlay",
+                        stringResource(R.string.app_name),
                         fontWeight = FontWeight.Medium
                     )
                 },
@@ -166,6 +177,7 @@ fun SettingsScreen(
                     cameraGranted = cameraGranted,
                     overlayGranted = overlayGranted,
                     accessibilityGranted = accessibilityGranted,
+                    onOpenCameraSettings = { viewModel.openCameraSettings() },
                     onOpenOverlaySettings = { viewModel.openOverlaySettings() },
                     onOpenAccessibilitySettings = { viewModel.openAccessibilitySettings() }
                 )
@@ -230,7 +242,7 @@ private fun StatusHero(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Refresh,
+                        imageVector = Icons.Default.QrCode,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onPrimary,
                         modifier = Modifier.size(28.dp)
@@ -350,7 +362,7 @@ private fun FloatingButtonsCard(
             )
             FloatingToggleRow(
                 color = BlueFab,
-                icon = Icons.Default.Refresh,
+                icon = Icons.Default.CenterFocusStrong,
                 title = "Сканер",
                 subtitle = if (isFloatingButtonEnabled) "Синяя кнопка — открывает камеру" else "Скрыта",
                 checked = isFloatingButtonEnabled,
@@ -360,7 +372,7 @@ private fun FloatingButtonsCard(
             DividerRow()
             FloatingToggleRow(
                 color = OrangeFab,
-                icon = Icons.Default.Refresh,
+                icon = Icons.Default.FormatListBulleted,
                 title = "Выбор полки",
                 subtitle = when {
                     !isFloatingButtonEnabled -> "Сначала включите «Сканер»"
@@ -372,7 +384,7 @@ private fun FloatingButtonsCard(
                 enabled = isShelfPickerAvailable,
                 onCheckedChange = onToggleShelfPicker
             )
-            if (isShelfPickerAvailable || !isFloatingButtonEnabled) {
+            if (isShelfPickerEnabled) {
                 Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                     Text(
                         text = "Открывает список полок с поиском. Выбор автоматически вводит штрих в SEW — удобно, когда в задании указана конкретная ячейка. Если ячейка не указана («любая полка в зоне»), отсканируйте штрих вручную как обычно.",
@@ -384,7 +396,7 @@ private fun FloatingButtonsCard(
             DividerRow()
             FloatingToggleRow(
                 color = GreenFab,
-                icon = Icons.Default.Refresh,
+                icon = Icons.Default.Search,
                 title = "Поиск товаров по SKU",
                 subtitle = when {
                     !isFloatingButtonEnabled -> "Сначала включите «Сканер»"
@@ -582,7 +594,7 @@ private fun TapToFocusCard(
             )
             FloatingToggleRow(
                 color = BlueFab,
-                icon = Icons.Default.Refresh,
+                icon = Icons.Default.FlashOn,
                 title = "Автофокус каждые 3 сек",
                 subtitle = "Камера перефокусируется автоматически в режиме сканирования",
                 checked = autoFocusEnabled,
@@ -607,9 +619,13 @@ private fun PermissionsCard(
     cameraGranted: Boolean,
     overlayGranted: Boolean,
     accessibilityGranted: Boolean,
+    onOpenCameraSettings: () -> Unit,
     onOpenOverlaySettings: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit
 ) {
+    val allGranted = cameraGranted && overlayGranted && accessibilityGranted
+    var expanded by remember { mutableStateOf(!allGranted) }
+
     Card(
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
@@ -621,29 +637,51 @@ private fun PermissionsCard(
                 title = "Разрешения",
                 subtitle = "Доступ к системе"
             )
-            PermissionRow(
-                icon = Icons.Default.Refresh,
-                title = "Камера",
-                subtitle = "Для распознавания штрихкодов",
-                granted = cameraGranted,
-                onClick = {}
-            )
-            DividerRow()
-            PermissionRow(
-                icon = Icons.Default.Refresh,
-                title = "Поверх приложений",
-                subtitle = "Плавающие кнопки и оверлей",
-                granted = overlayGranted,
-                onClick = onOpenOverlaySettings
-            )
-            DividerRow()
-            PermissionRow(
-                icon = Icons.Default.Refresh,
-                title = "Спец. возможности",
-                subtitle = "Авто-ввод штрихов в SEW",
-                granted = accessibilityGranted,
-                onClick = onOpenAccessibilitySettings
-            )
+            if (expanded) {
+                PermissionRow(
+                    icon = Icons.Default.CameraAlt,
+                    title = "Камера",
+                    subtitle = "Для распознавания штрихкодов",
+                    granted = cameraGranted,
+                    onClick = onOpenCameraSettings
+                )
+                DividerRow()
+                PermissionRow(
+                    icon = Icons.Default.Layers,
+                    title = "Поверх приложений",
+                    subtitle = "Плавающие кнопки и оверлей",
+                    granted = overlayGranted,
+                    onClick = onOpenOverlaySettings
+                )
+                DividerRow()
+                PermissionRow(
+                    icon = Icons.Default.Accessibility,
+                    title = "Спец. возможности",
+                    subtitle = "Авто-ввод штрихов в SEW",
+                    granted = accessibilityGranted,
+                    onClick = onOpenAccessibilitySettings
+                )
+            } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { expanded = true }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Все разрешения выданы",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        "Показать",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
         }
     }
 }
@@ -771,7 +809,7 @@ private fun SewCalibrationCard(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Refresh,
+                        imageVector = Icons.Default.Tune,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.size(18.dp)
@@ -801,22 +839,44 @@ private fun SewCalibrationCard(
             }
 
             if (!awaiting) {
+                var helpExpanded by remember { mutableStateOf(!calibration.isCalibrated) }
                 Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    HelpBlock(
-                        text = buildString {
-                            if (currentPackageLabel != null) {
-                                append("1. Заранее откройте ").append(currentPackageLabel)
-
-                                    .append(", нажмите «Ручной ввод», уберите клавиатуру.\n")
-                            } else {
-                                append("1. Заранее откройте приложение SEW, нажмите «Ручной ввод», уберите клавиатуру.\n")
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { helpExpanded = !helpExpanded }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Как это работает",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Icon(
+                            imageVector = if (helpExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = if (helpExpanded) "Свернуть" else "Развернуть",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    if (helpExpanded) {
+                        HelpBlock(
+                            text = buildString {
+                                if (currentPackageLabel != null) {
+                                    append("1. Заранее откройте ").append(currentPackageLabel)
+                                        .append(", нажмите «Ручной ввод», уберите клавиатуру.\n")
+                                } else {
+                                    append("1. Заранее откройте приложение SEW, нажмите «Ручной ввод», уберите клавиатуру.\n")
+                                }
+                                append("2. Нажмите «Откалибровать» — появится оверлей.\n")
+                                append("3. Тапните на «Ручной ввод» (оверлей запомнит позицию).\n")
+                                append("4. Тапните на «Готово» (оверлей запомнит позицию).\n")
+                                append("5. Проверьте кнопкой «Тест».")
                             }
-                            append("2. Нажмите «Откалибровать» — появится оверлей.\n")
-                            append("3. Тапните на «Ручной ввод» (оверлей запомнит позицию).\n")
-                            append("4. Тапните на «Готово» (оверлей запомнит позицию).\n")
-                            append("5. Проверьте кнопкой «Тест».")
-                        }
-                    )
+                        )
+                    }
                 }
             }
 
@@ -1145,7 +1205,14 @@ private fun UpdateCard(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(12.dp))
-                                .background(MaterialTheme.colorScheme.tertiaryContainer)
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(
+                                            MaterialTheme.colorScheme.tertiaryContainer,
+                                            MaterialTheme.colorScheme.tertiary.copy(alpha = 0.3f)
+                                        )
+                                    )
+                                )
                                 .padding(14.dp)
                         ) {
                             Column {
@@ -1254,7 +1321,7 @@ private fun AboutFooter(version: String) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = "Scanner Overlay v$version",
+            text = "${stringResource(R.string.app_name)} v$version",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontWeight = FontWeight.Medium
@@ -1262,7 +1329,7 @@ private fun AboutFooter(version: String) {
         Text(
             text = "github.com/Monutor/scanner-overlay",
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
