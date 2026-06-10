@@ -16,9 +16,6 @@ class BarcodeAnalyzer(
     private val cooldownMs: Long = 2000L,
     private val startupDelayMs: Long = 1500L,
     private val executor: ScheduledExecutorService,
-    private val windowMs: Long = 300L,
-    private val fallbackDelayMs: Long = 700L,
-    private val requiredMatches: Int = 2,
     private val onResult: (ScannerResult) -> Unit
 ) : ImageAnalysis.Analyzer {
     private val createdAt = System.currentTimeMillis()
@@ -44,11 +41,6 @@ class BarcodeAnalyzer(
     private var lastScanTime = 0L
     private val scannedCodes = java.util.concurrent.ConcurrentLinkedQueue<String>()
     private val maxCachedCodes = 50
-
-    private val window = FrameWindow(windowMs)
-    @Volatile private var firstScanAt: Long = 0L
-    @Volatile private var lastFiredCode: String? = null
-    private var lastFireTime = 0L
 
     @ExperimentalGetImage
     override fun analyze(imageProxy: ImageProxy) {
@@ -120,14 +112,7 @@ class BarcodeAnalyzer(
                             return@addOnSuccessListener
                         }
 
-                        val canonical = BarcodeShape.bestCanonical(value)
-                        if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "value='$value' canonical=$canonical")
-
-                        if (canonical != null) {
-                            handleWarehouseCode(canonical, centerBarcode.format)
-                        } else {
-                            handleNonWarehouseCode(value, centerBarcode.format)
-                        }
+                        handleBarcode(value, centerBarcode.format)
                     }
                 }
                 .addOnFailureListener { e ->
@@ -144,62 +129,21 @@ class BarcodeAnalyzer(
         }
     }
 
-    private fun handleWarehouseCode(canonical: String, format: Int) {
-        val now = System.currentTimeMillis()
-        if (canonical == lastFiredCode && now - lastFireTime < cooldownMs) {
-            if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "rejected warehouse cooldown: $canonical")
-            return
-        }
-
-        val confirmed = window.add(canonical, now, requiredMatches)
-        if (confirmed != null) {
-            val lookupResult = BarcodeDatabase.lookup(canonical)
-            if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "CONFIRMED: $canonical lookup=$lookupResult")
-            onResult(ScannerResult.Success(canonical, format, lookupResult))
-            lastFiredCode = canonical
-            lastFireTime = now
-            window.clear()
-            firstScanAt = 0L
-        } else if (firstScanAt == 0L) {
-            firstScanAt = now
-            executor.schedule(::fireFallback, fallbackDelayMs, TimeUnit.MILLISECONDS)
-            if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "warehouse waiting for confirmation: $canonical (window size=${window.size()})")
-        } else if (BuildConfig.DEBUG) {
-            android.util.Log.d("BarcodeAnalyzer", "warehouse accumulating: $canonical (window size=${window.size()})")
-        }
-    }
-
-    private fun fireFallback() {
-        if (firstScanAt == 0L) return
-        val best = window.bestCanonical()
-        firstScanAt = 0L
-        window.clear()
-        if (best == null || best == lastFiredCode) {
-            if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "fallback: nothing to fire (best=$best lastFired=$lastFiredCode)")
-            return
-        }
-        val lookupResult = BarcodeDatabase.lookup(best)
-        if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "FALLBACK: $best lookup=$lookupResult")
-        onResult(ScannerResult.Success(best, Barcode.FORMAT_CODE_128, lookupResult))
-        lastFiredCode = best
-        lastFireTime = System.currentTimeMillis()
-    }
-
-    private fun handleNonWarehouseCode(value: String, format: Int) {
+    private fun handleBarcode(value: String, format: Int) {
         val now = System.currentTimeMillis()
         if (value == lastScannedCode && now - lastScanTime < cooldownMs) {
-            if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "rejected non-warehouse cooldown: $value")
+            if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "rejected cooldown: $value")
             return
         }
         if (scannedCodes.contains(value)) {
-            if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "rejected non-warehouse duplicate: $value")
+            if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "rejected duplicate: $value")
             return
         }
         addScannedCode(value)
         lastScannedCode = value
         lastScanTime = now
-        if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "NON-WAREHOUSE SUCCESS: $value")
-        onResult(ScannerResult.Success(value, format, null))
+        if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "SUCCESS: $value")
+        onResult(ScannerResult.Success(value, format))
     }
 
     private fun addScannedCode(code: String) {
@@ -211,9 +155,7 @@ class BarcodeAnalyzer(
 
     fun reset() {
         executor.execute {
-            window.clear()
-            firstScanAt = 0L
-            lastFiredCode = null
+            lastScannedCode = null
         }
     }
 

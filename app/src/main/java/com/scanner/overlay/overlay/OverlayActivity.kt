@@ -1,6 +1,8 @@
 package com.scanner.overlay.overlay
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.pm.PackageManager
 
 import android.os.Build
@@ -47,7 +49,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.delay
@@ -70,15 +71,13 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import androidx.compose.runtime.DisposableEffect
 import com.scanner.overlay.R
-import com.scanner.overlay.ScannerApp
 import com.scanner.overlay.accessibility.ScannerAccessibilityService
-import com.scanner.overlay.calibration.SewCalibration
 import com.scanner.overlay.scanner.BarcodeAnalyzer
-import com.scanner.overlay.scanner.BarcodeDatabase
-import com.scanner.overlay.scanner.BarcodeLookupResult
 import com.scanner.overlay.scanner.ScannerResult
-import com.scanner.overlay.scanner.WarehouseItem
+import com.scanner.overlay.calibration.SewCalibration
 import com.scanner.overlay.util.toastAtBottom
+import androidx.core.app.NotificationCompat
+import com.scanner.overlay.ScannerApp
 
 @AndroidEntryPoint
 class OverlayActivity : ComponentActivity() {
@@ -86,39 +85,9 @@ class OverlayActivity : ComponentActivity() {
     private lateinit var vibrator: Vibrator
     private lateinit var prefs: android.content.SharedPreferences
 
-    private val finishHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private val manualInputHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private var manualInputRunnable: Runnable? = null
-    @Volatile private var pendingBarcode: String? = null
-    @Volatile private var injectionAttempted = false
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     private val isSubmittingToSew = mutableStateOf(false)
-
-    private val finishRunnable = Runnable {
-        android.util.Log.d("OverlayActivity", "finishRunnable executing, isFinishing=$isFinishing, barcode=${pendingBarcode}")
-        try {
-            val barcode = pendingBarcode
-            if (!isFinishing && barcode != null && !injectionAttempted) {
-                injectionAttempted = true
-                if (buildSewCalibration().isCalibrated) {
-                    triggerSewAutoInput(barcode)
-                } else {
-                    android.util.Log.d("OverlayActivity", "SEW not calibrated, falling back to autoInjectText")
-                    toastAtBottom("Сделайте калибровку SEW")
-                    val service = ScannerAccessibilityService.instance
-                    if (service?.autoInjectText(barcode) != true) {
-                        service?.injectText(barcode)
-                    }
-                    if (!isFinishing) finish()
-                }
-            } else if (!isFinishing) {
-                finish()
-            }
-        } catch (e: Exception) {
-            android.util.Log.e("OverlayActivity", "finishRunnable crash", e)
-            if (!isFinishing) finish()
-        }
-    }
 
     private fun buildSewCalibration(): SewCalibration {
         return SewCalibration(
@@ -150,16 +119,16 @@ class OverlayActivity : ComponentActivity() {
             if (!isFinishing) finish()
             return
         }
-        if (!isFinishing) finish()
         service.runSewAutoInput(
             barcode = barcode,
             calibration = cal,
             onResult = { ok, message -> onSewInputResult(ok, message) }
         )
+        if (!isFinishing) finish()
     }
 
     private fun onSewInputResult(ok: Boolean, message: String) {
-        finishHandler.post {
+        mainHandler.post {
             isSubmittingToSew.value = false
             val title = if (ok) "Штрих введён" else "Ошибка ввода в SEW"
             val text = if (ok) "Готово" else message.take(200)
@@ -184,12 +153,10 @@ class OverlayActivity : ComponentActivity() {
     }
 
     private fun vibrateResult(ok: Boolean) {
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val ms = if (ok) 100L else 400L
-                vibrator.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
-            }
-        } catch (_: Exception) {}
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val ms = if (ok) 100L else 400L
+            vibrator.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
+        }
     }
 
     private val cameraPermissionLauncher = registerForActivityResult(
@@ -212,7 +179,6 @@ class OverlayActivity : ComponentActivity() {
         prefs = getSharedPreferences("scanner_prefs", MODE_PRIVATE)
         setupVibrator()
         checkCameraPermission()
-        BarcodeDatabase.init(this)
 
         if (prefs.getBoolean("tap_to_focus_enabled", true) &&
             !prefs.getBoolean("focus_hint_shown", false)
@@ -232,34 +198,16 @@ class OverlayActivity : ComponentActivity() {
                         viewModel = viewModel,
                         isSubmittingToSew = isSubmittingToSew,
                         onClose = { finish() },
-                        onBarcodeScanned = { barcode, hasHint -> onBarcodeScanned(barcode, hasHint) },
-                        onScheduleFinish = { barcode, hasHint ->
-                            pendingBarcode = barcode
-                            android.util.Log.d("ScanFlow", "onScheduleFinish: barcode=$barcode, hasHint=$hasHint")
-                            finishHandler.removeCallbacks(finishRunnable)
-                            finishHandler.postDelayed(finishRunnable, 1500L)
+                        onBarcodeScanned = { barcode -> onBarcodeScanned(barcode) },
+                        onInjectToSew = { barcode ->
+                            triggerSewAutoInput(barcode)
                         },
-                        onManualSubmit = { barcode ->
-                            cancelFinish()
-                            finish()
-                            injectionAttempted = true
-                            manualInputRunnable?.let { manualInputHandler.removeCallbacks(it) }
-                            val r = Runnable {
-                                ScannerAccessibilityService.instance?.let {
-                                    if (it.autoInjectText(barcode) != true) {
-                                        it.injectText(barcode)
-                                    }
-                                }
-                                manualInputRunnable = null
-                            }
-                            manualInputRunnable = r
-                            manualInputHandler.postDelayed(r, 200)
+                        onCopyToClipboard = { barcode ->
+                            copyToClipboard(barcode)
                         },
                         onRetry = {
-                            injectionAttempted = false
                             viewModel.resetToScanning()
                         },
-                        onCancelFinish = { cancelFinish() },
                         onRequestInputFocus = { requestInputFocus() },
                         onReleaseInputFocus = { releaseInputFocus() },
                         tapToFocusEnabled = tapToFocusEnabled,
@@ -278,7 +226,7 @@ class OverlayActivity : ComponentActivity() {
         }
     }
 
-    fun onBarcodeScanned(barcode: String, hasHint: Boolean = false) {
+    fun onBarcodeScanned(barcode: String) {
         try {
             vibrate()
             playBeep()
@@ -287,12 +235,15 @@ class OverlayActivity : ComponentActivity() {
         }
     }
 
-    fun cancelFinish() {
-        finishHandler.removeCallbacks(finishRunnable)
-    }
-
-    private fun injectText(text: String) {
-        ScannerAccessibilityService.instance?.injectText(text)
+    private fun copyToClipboard(barcode: String) {
+        try {
+            val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("barcode", barcode))
+            toastAtBottom("Скопировано: $barcode")
+        } catch (e: Exception) {
+            android.util.Log.e("OverlayActivity", "copyToClipboard error", e)
+        }
+        if (!isFinishing) finish()
     }
 
     private fun requestInputFocus() {
@@ -352,25 +303,14 @@ class OverlayActivity : ComponentActivity() {
     }
 
     private fun vibrate() {
-        vibrator.vibrate(
-            VibrationEffect.createOneShot(200, VibrationEffect.DEFAULT_AMPLITUDE)
-        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vibrator.vibrate(VibrationEffect.createOneShot(200, VibrationEffect.DEFAULT_AMPLITUDE))
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        finishHandler.removeCallbacks(finishRunnable)
-        manualInputRunnable?.let { manualInputHandler.removeCallbacks(it) }
-        manualInputRunnable = null
     }
-}
-
-private fun shouldAutoInject(result: ScannerResult.Success): Boolean = when (val l = result.lookupResult) {
-    null -> true
-    is BarcodeLookupResult.ExactMatch -> true
-    is BarcodeLookupResult.FuzzyMatch -> true
-    is BarcodeLookupResult.PrefixMatch -> l.items.size == 1
-    BarcodeLookupResult.NotFound -> false
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -379,11 +319,10 @@ fun OverlayContent(
     viewModel: OverlayViewModel,
     isSubmittingToSew: State<Boolean> = remember { mutableStateOf(false) },
     onClose: () -> Unit,
-    onBarcodeScanned: (String, Boolean) -> Unit,
-    onScheduleFinish: (String, Boolean) -> Unit,
-    onManualSubmit: (String) -> Unit,
+    onBarcodeScanned: (String) -> Unit,
+    onInjectToSew: (String) -> Unit,
+    onCopyToClipboard: (String) -> Unit,
     onRetry: () -> Unit = {},
-    onCancelFinish: () -> Unit = {},
     onRequestInputFocus: () -> Unit = {},
     onReleaseInputFocus: () -> Unit = {},
     tapToFocusEnabled: Boolean = true,
@@ -391,7 +330,6 @@ fun OverlayContent(
 ) {
     val state by viewModel.state.collectAsState()
     val isTimedOut by viewModel.isScanTimedOut.collectAsState()
-    val lookupHint by viewModel.lookupHint.collectAsState()
     var manualInput by remember { mutableStateOf("") }
     var showManualInput by remember { mutableStateOf(false) }
     var torchOn by remember { mutableStateOf(false) }
@@ -441,7 +379,7 @@ fun OverlayContent(
         }
         if (state is OverlayViewModel.OverlayState.Success) {
             val s = state as OverlayViewModel.OverlayState.Success
-            android.util.Log.d("ScanFlow", "LaunchedEffect: state=Success, barcode=${s.barcode}, hasHint=${s.hasHint}")
+            android.util.Log.d("ScanFlow", "LaunchedEffect: state=Success, barcode=${s.barcode}")
         }
     }
 
@@ -501,12 +439,9 @@ fun OverlayContent(
                                         coroutineScope.launch {
                                             try {
                                                 detectedBarcode = true
-                                                onBarcodeScanned(result.barcode, result.lookupResult != null)
-                                                delay(2000)
+                                                onBarcodeScanned(result.barcode)
+                                                delay(500)
                                                 viewModel.onBarcodeDetected(result)
-                                                if (shouldAutoInject(result)) {
-                                                    onScheduleFinish(result.barcode, result.lookupResult != null)
-                                                }
                                             } catch (e: kotlinx.coroutines.CancellationException) {
                                                 throw e
                                             } catch (e: Exception) {
@@ -522,7 +457,6 @@ fun OverlayContent(
                         showManualInput = true
                         manualInput = barcode
                     },
-                    onCancelFinish = onCancelFinish,
                     resetScanCompleted = state is OverlayViewModel.OverlayState.Scanning,
                     modifier = Modifier.fillMaxSize()
                 )
@@ -696,8 +630,8 @@ fun OverlayContent(
                                 keyboardActions = KeyboardActions(
                                     onDone = {
                                         if (manualInput.isNotBlank()) {
-                                            onManualSubmit(manualInput)
-                                            onClose()
+                                            viewModel.onBarcodeDetected(ScannerResult.Success(manualInput, 0))
+                                            showManualInput = false
                                         }
                                     }
                                 ),
@@ -715,12 +649,12 @@ fun OverlayContent(
                                 Button(
                                     onClick = {
                                         if (manualInput.isNotBlank()) {
-                                            onManualSubmit(manualInput)
-                                            onClose()
+                                            viewModel.onBarcodeDetected(ScannerResult.Success(manualInput, 0))
+                                            showManualInput = false
                                         }
                                     }
                                 ) {
-                                    Text("Отправить")
+                                    Text("Готово")
                                 }
                             }
                         }
@@ -752,16 +686,6 @@ fun OverlayContent(
                             Text("✓", fontSize = 36.sp, color = Color.White)
                         }
                         Spacer(Modifier.height(16.dp))
-                        if (lookupHint != null) {
-                            Text(
-                                text = lookupHint!!,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 26.sp,
-                                textAlign = TextAlign.Center,
-                                color = Color(0xFF4CAF50)
-                            )
-                            Spacer(Modifier.height(4.dp))
-                        }
                         Text(
                             text = barcode,
                             fontWeight = FontWeight.Bold,
@@ -771,129 +695,36 @@ fun OverlayContent(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "Готово",
+                            "Штрихкод найден",
                             color = Color(0xAAFFFFFF),
                             fontSize = 13.sp,
                             letterSpacing = 1.sp
                         )
                         Spacer(Modifier.height(24.dp))
                         Button(
-                            onClick = { onClose() },
+                            onClick = { onCopyToClipboard(barcode) },
                             shape = RoundedCornerShape(14.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0x33FFFFFF)
-                            )
+                                containerColor = Color(0xFF7B1FA2)
+                            ),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Закрыть", color = Color.White)
+                            Text("Копировать", color = Color.White)
                         }
-                    }
-                }
-            }
-
-            state is OverlayViewModel.OverlayState.NotFound -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color(0x99000000)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .background(Color(0x1AFFFFFF), RoundedCornerShape(24.dp))
-                            .border(0.5.dp, Color(0x14FFFFFF), RoundedCornerShape(24.dp))
-                            .padding(horizontal = 40.dp, vertical = 32.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(72.dp)
-                                .background(Color(0xFFFF9800), CircleShape),
-                            contentAlignment = Alignment.Center
+                        Spacer(Modifier.height(8.dp))
+                        Button(
+                            onClick = { onInjectToSew(barcode) },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF4CAF50)
+                            ),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("?", fontSize = 36.sp, color = Color.White)
+                            Text("Ввести в SEW", color = Color.White)
                         }
-                        Spacer(Modifier.height(16.dp))
-                        Text(
-                            "Не найден в базе",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 18.sp,
-                            color = Color.White
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            "Пересканируйте штрихкод",
-                            color = Color(0xAAFFFFFF),
-                            fontSize = 13.sp
-                        )
-                    }
-                }
-            }
-
-            state is OverlayViewModel.OverlayState.MultipleMatches -> {
-                val matches = (state as OverlayViewModel.OverlayState.MultipleMatches).items
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color(0xCC000000))
-                        .clickable(enabled = false) {},
-                    contentAlignment = Alignment.Center
-                ) {
-                    Card(
-                        modifier = Modifier
-                            .padding(24.dp)
-                            .fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White)
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                "Найдено ${matches.size} варианта",
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                "Выберите правильный:",
-                                color = Color(0xAA000000),
-                                fontSize = 14.sp
-                            )
-                            Spacer(Modifier.height(16.dp))
-                            matches.forEach { item ->
-                                Button(
-                                    onClick = { viewModel.onMultipleMatchSelected(item) },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 4.dp),
-                                    shape = RoundedCornerShape(12.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = Color(0xFFF5F5F5)
-                                    )
-                                ) {
-                                    Column(
-                                        modifier = Modifier.padding(vertical = 4.dp),
-                                        horizontalAlignment = Alignment.Start
-                                    ) {
-                                        Text(
-                                            item.name,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 16.sp,
-                                            color = Color.Black
-                                        )
-                                        Text(
-                                            item.barcode,
-                                            fontSize = 12.sp,
-                                            color = Color(0x66000000)
-                                        )
-                                    }
-                                }
-                            }
-                            Spacer(Modifier.height(8.dp))
-                            TextButton(onClick = { viewModel.resetToScanning() }) {
-                                Text("Отмена", color = Color(0xAA000000))
-                            }
+                        Spacer(Modifier.height(12.dp))
+                        TextButton(onClick = onClose) {
+                            Text("Закрыть", color = Color(0xAAFFFFFF))
                         }
                     }
                 }
@@ -970,7 +801,6 @@ fun CameraPreview(
     torchOn: Boolean = false,
     onBarcodeScanned: (ScannerResult.Success) -> Unit,
     onShowManualInput: ((String) -> Unit)? = null,
-    onCancelFinish: () -> Unit = {},
     resetScanCompleted: Boolean = false,
     onCameraReady: (CameraControl, PreviewView) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier

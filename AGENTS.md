@@ -14,12 +14,13 @@ Android-приложение для сканирования штрихкодо�
 ## Dev commands
 
 | Команда | Что делает |
-|---|---|
+|---|---|---|
 | `.\gradlew installDebug` | Сборка + установка debug |
 | `.\gradlew assembleDebug` | Только сборка debug APK |
 | `build.ps1 install` | То же, что `installDebug` |
 | `build.ps1 apk` | `assembleDebug` (apk без установки) |
 | `build.ps1 run` | Launch MainActivity через adb |
+| `build.ps1 install-release` | `assembleRelease` + `adb install -r` |
 | `build.ps1 release` | Полный релиз (assembleRelease + git tag + gh release) |
 | `adb uninstall com.scanner.overlay` | Удаление |
 
@@ -35,13 +36,11 @@ Android-приложение для сканирования штрихкодо�
 | `settings/SettingsViewModel.kt` | Сервис on/off, таймаут, качество, SEW-тест, авто-апдейт |
 | `settings/ShelfPickerActivity.kt` | Выбор полки из базы + поиск + авто-ввод в SEW |
 | `overlay/OverlayActivity.kt` | Прозрачный fullscreen + камера + анимации + ручной ввод |
-| `overlay/OverlayViewModel.kt` | Состояния сканера (`OverlayState`), 7s авто-reset для NotFound |
-| `scanner/BarcodeAnalyzer.kt` | MLKit-анализ: фильтр по центру, cooldown, кэш, FrameWindow-подтверждение |
-| `scanner/BarcodeDatabase.kt` | Загрузка CSV из assets, exact/prefix/fuzzy поиск |
-| `scanner/BarcodeLookupResult.kt` | `WarehouseItem` + sealed `BarcodeLookupResult` |
-| `scanner/BarcodeShape.kt` | Canonical форма `STL`+12 цифр для складских штрихкодов |
-| `scanner/FrameWindow.kt` | Скользящее временное окно для подтверждения штрихкода (2/300ms) |
-| `scanner/ScannerResult.kt` | Sealed: `Success(barcode, format, lookupResult?)` / `Error` |
+| `overlay/OverlayViewModel.kt` | Состояния сканера (`OverlayState`) |
+| `scanner/BarcodeAnalyzer.kt` | MLKit-анализ: фильтр по центру, cooldown, dedup-кэш |
+| `scanner/BarcodeDatabase.kt` | Загрузка CSV из assets, поиск полок по названию |
+| `scanner/WarehouseItem.kt` | `WarehouseItem` — данные полки склада |
+| `scanner/ScannerResult.kt` | Sealed: `Success(barcode, format)` / `Error` |
 | `accessibility/ScannerAccessibilityService.kt` | Ввод текста в поля, SEW auto-input (6-шаговый pipeline) |
 | `service/ScannerForegroundService.kt` | Persistent notification + владелец FloatingScanButton |
 | `service/FloatingScanButton.kt` | WindowManager overlay-кнопка (drag, tap → OverlayActivity) |
@@ -60,9 +59,8 @@ Android-приложение для сканирования штрихкодо�
 
 ## Key types
 
-- `ScannerResult` — `Success(barcode, format, lookupResult?)` / `Error`. **Нет** `Scanning` (оно в `OverlayState`).
-- `OverlayState` — `Scanning`, `Success(barcode, hasHint)`, `NotFound(scannedBarcode)`, `MultipleMatches(items, scannedBarcode)`, `Error`.
-- `BarcodeLookupResult` — `ExactMatch(WarehouseItem)` / `PrefixMatch(List)` / `FuzzyMatch(WarehouseItem, distance)` / `NotFound`.
+- `ScannerResult` — `Success(barcode, format)` / `Error`. **Нет** `Scanning` (оно в `OverlayState`).
+- `OverlayState` — `Scanning`, `Success(barcode)`, `Error`.
 - `WarehouseItem(name, barcode, section, type, number, level)`.
 
 ## SharedPreferences `"scanner_prefs"`
@@ -112,8 +110,7 @@ Watchdog: 6 секунд. Если не перевзведён → `releaseWatch
 ## OverlayActivity
 
 - Window flags: `NOT_TOUCH_MODAL | WATCH_OUTSIDE_TOUCH | KEEP_SCREEN_ON | NOT_FOCUSABLE`. `NOT_FOCUSABLE` снимается только при открытии диалога ручного ввода.
-- После успешного скана: вибро 200ms → beep (res/raw/scan_beep.mp3 или ringtone) → 2s пауза → `finishRunnable` → `autoInjectText` → fallback `injectText` → `finish()`.
-- `OverlayState.NotFound` сбрасывается в `Scanning` через 7s.
+- После успешного скана: вибро 200ms → beep (res/raw/scan_beep.mp3 или ringtone) → 2s пауза → `finishRunnable` → `triggerSewAutoInput` (если калиброван) → fallback `autoInjectText` → `injectText` → `finish()`.
 - `triggerSewAutoInput(barcode)`: детектит активный браузер, вызывает `service.runSewAutoInput`. Результат → Notification (успех/ошибка).
 
 ## SewCalibrationService
@@ -156,21 +153,22 @@ WindowManager overlay: 60dp, круглая, синяя (`#1976D2`), `ic_launche
 - **KSP, не KAPT** для Hilt. Если увидишь `kapt(...)` — регрессия.
 - `gradle.properties` — нестандартные флаги, не «прибирать».
 - `strings.xml` почти не используется — UI строки в Compose хардкодом (русские).
-- `BarcodeDatabase` инициализируется синхронно без блокировок чтения — только из `OverlayActivity.onCreate`.
+- `BarcodeDatabase` инициализируется синхронно без блокировок чтения — только из `ShelfPickerActivity.onCreate`.
 - Нет CI/CD, сборка только локально.
 - `OverlayActivity` держит `vibrator`, `prefs`, `finishHandler` как поля активити — помни про `onDestroy`.
 - И debug и release используют один release-signing config — установка поверх не ломается.
 - `build.ps1` сам выставляет `JAVA_HOME` / `ANDROID_HOME`. Если вызываешь `gradlew` напрямую — выстави явно.
-- `BarcodeAnalyzer` использует `FrameWindow` (2+ совпадения за 300ms) для складских штрихкодов; не-складские срабатывают сразу с dedup-кэшем (50 записей).
-- `BarcodeShape` определяет каноническую форму `STL`+12 цифр (15 символов) — основа для фильтрации warehouse-кодов.
-- Дизайн-доки: `docs/superpowers/{specs,plans}/`. Баги визуала: `docs/DESIGN_BACKLOG.md` (10 issues, все иконки — placeholder `Icons.Default.Refresh`).
+- `BarcodeAnalyzer` использует dedup-кэш (50 записей) и cooldown (2s) для всех штрихкодов.
+- Дизайн-доки: `docs/superpowers/{specs,plans}/`. `docs/DESIGN_BACKLOG.md` — design review notes (10 issues, исправлены в v1.9.1).
+- `strings.xml` app_name — **"SEW-Помощник"**, не "Scanner Overlay". TopAppBar использует `stringResource(R.string.app_name)`.
+- Версия: `versionCode` / `versionName` в `app/build.gradle.kts:19-20`.
 
 ## Where to look
 
 | Задача | Файлы |
 |---|---|
 | Логика сканирования / фильтры | `BarcodeAnalyzer.kt` |
-| UI после скана | `OverlayViewModel.kt` + `OverlayActivity.kt` |
+| Состояния сканера + авто-ввод | `OverlayViewModel.kt` + `OverlayActivity.kt` |
 | Ввод текста в чужое приложение | `ScannerAccessibilityService.kt` |
 | SEW-калибровка (2-tap) | `SewCalibrationService.kt` + `SewCalibration.kt` |
 | SEW auto-input (тапы + вставка) | `OverlayActivity.triggerSewAutoInput` + `ScannerAccessibilityService.runSewAutoInput` + `SettingsViewModel.runSewCalibrationTest` |
