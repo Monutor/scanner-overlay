@@ -28,10 +28,12 @@ class ArticleLookupButton(
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val displayMetrics = context.resources.displayMetrics
 
-    private val buttonSizePx = (60 * displayMetrics.density).toInt()
     private val marginPx = (16 * displayMetrics.density).toInt()
-    private val mainButtonSizePx = (60 * displayMetrics.density).toInt()
-    private val shelfButtonSizePx = (56 * displayMetrics.density).toInt()
+
+    private var buttonSizeDp: Int
+    private var buttonSizePx: Int
+    private var mainButtonSizePx: Int
+    private var shelfButtonSizePx: Int
     private val defaultY: Int = (100 * displayMetrics.density).toInt()
 
     private var isAdded = false
@@ -48,6 +50,10 @@ class ArticleLookupButton(
     private val params: WindowManager.LayoutParams
 
     init {
+        buttonSizeDp = prefs.getInt(PREF_SIZE, DEFAULT_SIZE_DP)
+        buttonSizePx = (buttonSizeDp * displayMetrics.density).toInt()
+        mainButtonSizePx = (60 * displayMetrics.density).toInt()
+        shelfButtonSizePx = (56 * displayMetrics.density).toInt()
         val bg = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(0xFF388E3C.toInt())
@@ -194,7 +200,25 @@ class ArticleLookupButton(
             .apply()
     }
 
+    fun updateSize(sizeDp: Int) {
+        if (sizeDp == buttonSizeDp) return
+        buttonSizeDp = sizeDp
+        buttonSizePx = (sizeDp * displayMetrics.density).toInt()
+        prefs.edit().putInt(PREF_SIZE, sizeDp).apply()
+        params.width = buttonSizePx
+        params.height = buttonSizePx
+        params.x = clampX(params.x)
+        params.y = clampY(params.y)
+        if (isAdded) {
+            try {
+                windowManager.updateViewLayout(button, params)
+            } catch (_: Exception) {}
+        }
+    }
+
     companion object {
+        private const val PREF_SIZE = "article_button_size_dp"
+        private const val DEFAULT_SIZE_DP = 60
         private const val PREF_X = "article_button_x"
         private const val PREF_Y = "article_button_y"
         private const val PREF_MAIN_X = "floating_button_x"

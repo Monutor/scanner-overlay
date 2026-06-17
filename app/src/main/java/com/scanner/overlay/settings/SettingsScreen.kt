@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -46,6 +47,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.scanner.overlay.R
 import com.scanner.overlay.calibration.SewCalibration
+import com.scanner.overlay.scanner.ScanHistoryEntry
 import com.scanner.overlay.calibration.SupportedBrowsers
 import com.scanner.overlay.update.UpdateInfo
 
@@ -84,6 +86,7 @@ fun SettingsScreen(
                 cameraGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
                 overlayGranted = android.provider.Settings.canDrawOverlays(context)
                 accessibilityGranted = viewModel.isAccessibilityServiceEnabled()
+                viewModel.refreshScanHistory()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -99,6 +102,11 @@ fun SettingsScreen(
     val articleLookupEnabled by viewModel.articleLookupEnabled.collectAsState()
     val tapToFocusEnabled by viewModel.tapToFocusEnabled.collectAsState()
     val autoFocusEnabled by viewModel.autoFocusEnabled.collectAsState()
+    val isTtsEnabled by viewModel.isTtsEnabled.collectAsState()
+    val scanButtonSizeDp by viewModel.scanButtonSizeDp.collectAsState()
+    val shelfButtonSizeDp by viewModel.shelfButtonSizeDp.collectAsState()
+    val articleButtonSizeDp by viewModel.articleButtonSizeDp.collectAsState()
+    val scanHistory by viewModel.scanHistory.collectAsState()
 
     val grantedCount = listOf(cameraGranted, overlayGranted, accessibilityGranted).count { it }
 
@@ -150,6 +158,25 @@ fun SettingsScreen(
                     onToggleFloatingButton = { viewModel.toggleService() },
                     onToggleShelfPicker = { viewModel.setShelfPickerEnabled(it) },
                     onToggleArticleLookup = { viewModel.setArticleLookupEnabled(it) }
+                )
+
+                TtsToggleCard(
+                    enabled = isTtsEnabled,
+                    onToggle = { viewModel.setTtsEnabled(it) }
+                )
+
+                ButtonSizeCard(
+                    scanSizeDp = scanButtonSizeDp,
+                    shelfSizeDp = shelfButtonSizeDp,
+                    articleSizeDp = articleButtonSizeDp,
+                    onScanSizeChange = { viewModel.setScanButtonSize(it) },
+                    onShelfSizeChange = { viewModel.setShelfButtonSize(it) },
+                    onArticleSizeChange = { viewModel.setArticleButtonSize(it) }
+                )
+
+                ScanHistoryCard(
+                    entries = scanHistory,
+                    onClear = { viewModel.clearScanHistory() }
                 )
 
                 SectionEyebrow("Сканирование")
@@ -417,6 +444,92 @@ private fun FloatingButtonsCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ButtonSizeCard(
+    scanSizeDp: Int,
+    shelfSizeDp: Int,
+    articleSizeDp: Int,
+    onScanSizeChange: (Int) -> Unit,
+    onShelfSizeChange: (Int) -> Unit,
+    onArticleSizeChange: (Int) -> Unit,
+) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        )
+    ) {
+        Column(modifier = Modifier.padding(vertical = 4.dp)) {
+            CardHeader(
+                title = "Размер кнопок",
+                subtitle = "От 40 до 96 dp, шаг 4 dp"
+            )
+            SizeSliderRow(
+                color = Color(0xFF1976D2),
+                label = "Сканер",
+                value = scanSizeDp,
+                onValueChange = onScanSizeChange
+            )
+            DividerRow()
+            SizeSliderRow(
+                color = Color(0xFFFB8C00),
+                label = "Выбор полки",
+                value = shelfSizeDp,
+                onValueChange = onShelfSizeChange
+            )
+            DividerRow()
+            SizeSliderRow(
+                color = Color(0xFF388E3C),
+                label = "Поиск артикула",
+                value = articleSizeDp,
+                onValueChange = onArticleSizeChange
+            )
+        }
+    }
+}
+
+@Composable
+private fun SizeSliderRow(
+    color: Color,
+    label: String,
+    value: Int,
+    onValueChange: (Int) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(12.dp)
+                .clip(CircleShape)
+                .background(color)
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.width(80.dp)
+        )
+        Slider(
+            value = value.toFloat(),
+            onValueChange = { onValueChange(it.toInt()) },
+            valueRange = 40f..96f,
+            steps = 13,
+            modifier = Modifier.weight(1f)
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = "$value dp",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(44.dp)
+        )
     }
 }
 
@@ -1308,6 +1421,114 @@ private fun UpdateCard(
                     Text("Закрыть")
                 }
             }
+        )
+    }
+}
+
+@Composable
+private fun TtsToggleCard(
+    enabled: Boolean,
+    onToggle: (Boolean) -> Unit,
+) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        )
+    ) {
+        FloatingToggleRow(
+            color = Color(0xFF7B1FA2),
+            icon = Icons.AutoMirrored.Filled.VolumeUp,
+            title = "Голосовое озвучивание",
+            subtitle = if (enabled) "Название полки после сканирования" else "Отключено",
+            checked = enabled,
+            enabled = true,
+            onCheckedChange = onToggle
+        )
+    }
+}
+
+@Composable
+private fun ScanHistoryCard(
+    entries: List<ScanHistoryEntry>,
+    onClear: () -> Unit,
+) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        )
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "История сканирований",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Medium
+                )
+                if (entries.isNotEmpty()) {
+                    TextButton(onClick = onClear) {
+                        Text("Очистить", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            if (entries.isEmpty()) {
+                Text(
+                    "Пока нет записей",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                val dateFormat = java.text.SimpleDateFormat("dd.MM HH:mm", java.util.Locale.getDefault())
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 240.dp)
+                ) {
+                    items(entries) { entry ->
+                        HistoryRow(entry, dateFormat)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistoryRow(
+    entry: ScanHistoryEntry,
+    dateFormat: java.text.SimpleDateFormat
+) {
+    val barcode = entry.barcode
+    val shelfName = com.scanner.overlay.scanner.BarcodeDatabase.getByBarcode(barcode)?.name
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = barcode,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            if (shelfName != null) {
+                Text(
+                    text = shelfName,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = dateFormat.format(java.util.Date(entry.timestamp)),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }

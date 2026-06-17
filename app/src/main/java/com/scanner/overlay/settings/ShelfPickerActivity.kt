@@ -1,6 +1,11 @@
 package com.scanner.overlay.settings
 
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
+import com.scanner.overlay.scanner.ScanHistoryEntry
 import android.view.HapticFeedbackConstants
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -58,11 +63,23 @@ class ShelfPickerActivity : ComponentActivity() {
     lateinit var favoritesStore: FavoritesStore
 
     private lateinit var prefs: android.content.SharedPreferences
+    private var textToSpeech: TextToSpeech? = null
+    private var ttsReady = false
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("scanner_prefs", MODE_PRIVATE)
         BarcodeDatabase.init(applicationContext)
+        textToSpeech = TextToSpeech(this) { status ->
+            ttsReady = (status == TextToSpeech.SUCCESS)
+            if (ttsReady) {
+                val langResult = textToSpeech?.setLanguage(java.util.Locale.forLanguageTag("ru-RU")) ?: -1
+                android.util.Log.d("ShelfPickerActivity", "TTS ready, setLanguage=$langResult")
+            } else {
+                android.util.Log.w("ShelfPickerActivity", "TTS init failed: status=$status")
+            }
+        }
         setContent {
             MaterialTheme {
                 ShelfPickerScreen(
@@ -96,7 +113,8 @@ class ShelfPickerActivity : ComponentActivity() {
         }
         android.util.Log.d("ShelfPickerActivity", "Starting runSewAutoInput barcode=${item.barcode} pkg=$targetPkg")
         toastAtBottom("Штрих полки «${item.name}»…", Toast.LENGTH_SHORT)
-        if (!isFinishing) finish()
+        ScanHistoryEntry.add(prefs, item.barcode)
+        val spoke = speakShelfName(item.name)
         service.runSewAutoInput(
             barcode = item.barcode,
             calibration = cal,
@@ -108,6 +126,46 @@ class ShelfPickerActivity : ComponentActivity() {
                 )
             }
         )
+        if (spoke) {
+            mainHandler.postDelayed({ if (!isFinishing) finish() }, 5000L)
+        } else {
+            if (!isFinishing) finish()
+        }
+    }
+
+    private fun speakShelfName(name: String): Boolean {
+        if (!prefs.getBoolean("tts_enabled", false)) {
+            android.util.Log.d("ShelfPickerActivity", "TTS skipped: tts_enabled=false")
+            return false
+        }
+        if (!ttsReady) {
+            android.util.Log.w("ShelfPickerActivity", "TTS skipped: not ready")
+            return false
+        }
+        android.util.Log.d("ShelfPickerActivity", "TTS speak: $name")
+        try {
+            textToSpeech?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onDone(utteranceId: String?) {
+                    mainHandler.post { if (!isFinishing) finish() }
+                }
+                override fun onError(utteranceId: String?) {
+                    mainHandler.post { if (!isFinishing) finish() }
+                }
+                override fun onStart(utteranceId: String?) {}
+            })
+            textToSpeech?.speak(name, TextToSpeech.QUEUE_FLUSH, null, "shelf_pick")
+            return true
+        } catch (e: Exception) {
+            android.util.Log.e("ShelfPickerActivity", "TTS speak error", e)
+            return false
+        }
+    }
+
+    override fun onDestroy() {
+        textToSpeech?.stop()
+        textToSpeech?.shutdown()
+        textToSpeech = null
+        super.onDestroy()
     }
 
     private fun buildSewCalibration(): SewCalibration {

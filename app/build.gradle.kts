@@ -16,8 +16,8 @@ android {
         applicationId = "com.scanner.overlay"
         minSdk = 26
         targetSdk = 36
-        versionCode = 20
-        versionName = "1.10.0"
+        versionCode = 21
+        versionName = "1.11.0"
     }
 
     signingConfigs {

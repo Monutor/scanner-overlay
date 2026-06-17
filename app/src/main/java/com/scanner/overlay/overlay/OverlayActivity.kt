@@ -11,6 +11,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.media.MediaPlayer
+import android.speech.tts.TextToSpeech
 import android.view.HapticFeedbackConstants
 import android.view.WindowManager
 import android.widget.Toast
@@ -73,6 +74,8 @@ import androidx.compose.runtime.DisposableEffect
 import com.scanner.overlay.R
 import com.scanner.overlay.accessibility.ScannerAccessibilityService
 import com.scanner.overlay.scanner.BarcodeAnalyzer
+import com.scanner.overlay.scanner.BarcodeDatabase
+import com.scanner.overlay.scanner.ScanHistoryEntry
 import com.scanner.overlay.scanner.ScannerResult
 import com.scanner.overlay.calibration.SewCalibration
 import com.scanner.overlay.util.toastAtBottom
@@ -84,6 +87,9 @@ class OverlayActivity : ComponentActivity() {
 
     private lateinit var vibrator: Vibrator
     private lateinit var prefs: android.content.SharedPreferences
+
+    private var textToSpeech: TextToSpeech? = null
+    private var ttsReady = false
 
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
@@ -177,6 +183,16 @@ class OverlayActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
 
         prefs = getSharedPreferences("scanner_prefs", MODE_PRIVATE)
+        BarcodeDatabase.init(this)
+        textToSpeech = TextToSpeech(this) { status ->
+            ttsReady = (status == TextToSpeech.SUCCESS)
+            if (ttsReady) {
+                val langResult = textToSpeech?.setLanguage(java.util.Locale.forLanguageTag("ru-RU")) ?: -1
+                android.util.Log.d("OverlayActivity", "TTS ready, setLanguage=$langResult")
+            } else {
+                android.util.Log.w("OverlayActivity", "TTS init failed: status=$status")
+            }
+        }
         setupVibrator()
         checkCameraPermission()
 
@@ -230,8 +246,21 @@ class OverlayActivity : ComponentActivity() {
         try {
             vibrate()
             playBeep()
+            speakShelfName(barcode)
+            ScanHistoryEntry.add(prefs, barcode)
         } catch (e: Exception) {
             android.util.Log.e("OverlayActivity", "onBarcodeScanned crash", e)
+        }
+    }
+
+    private fun speakShelfName(barcode: String) {
+        if (!prefs.getBoolean("tts_enabled", false)) return
+        if (!ttsReady) return
+        val item = BarcodeDatabase.getByBarcode(barcode) ?: return
+        try {
+            textToSpeech?.speak(item.name, TextToSpeech.QUEUE_FLUSH, null, "shelf")
+        } catch (e: Exception) {
+            android.util.Log.e("OverlayActivity", "TTS speak error", e)
         }
     }
 
@@ -309,6 +338,9 @@ class OverlayActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        textToSpeech?.stop()
+        textToSpeech?.shutdown()
+        textToSpeech = null
         super.onDestroy()
     }
 }
@@ -630,8 +662,10 @@ fun OverlayContent(
                                 keyboardActions = KeyboardActions(
                                     onDone = {
                                         if (manualInput.isNotBlank()) {
-                                            viewModel.onBarcodeDetected(ScannerResult.Success(manualInput, 0))
+                                            val b = manualInput
                                             showManualInput = false
+                                            onBarcodeScanned(b)
+                                            onInjectToSew(b)
                                         }
                                     }
                                 ),
@@ -649,8 +683,10 @@ fun OverlayContent(
                                 Button(
                                     onClick = {
                                         if (manualInput.isNotBlank()) {
-                                            viewModel.onBarcodeDetected(ScannerResult.Success(manualInput, 0))
+                                            val b = manualInput
                                             showManualInput = false
+                                            onBarcodeScanned(b)
+                                            onInjectToSew(b)
                                         }
                                     }
                                 ) {

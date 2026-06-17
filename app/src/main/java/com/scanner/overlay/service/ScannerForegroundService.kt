@@ -50,9 +50,20 @@ class ScannerForegroundService : Service() {
         const val ACTION_STOP = "com.scanner.overlay.STOP"
         const val PREF_KEY_SHELF_PICKER_ENABLED = "shelf_picker_enabled"
         const val PREF_KEY_ARTICLE_LOOKUP_ENABLED = "article_lookup_enabled"
+        private const val PREF_SCAN_BUTTON_SIZE = "scan_button_size_dp"
+        private const val PREF_SHELF_BUTTON_SIZE = "shelf_button_size_dp"
+        private const val PREF_ARTICLE_BUTTON_SIZE = "article_button_size_dp"
         @Volatile
         var isRunning: Boolean = false
             private set
+    }
+
+    private val sizePrefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        when (key) {
+            PREF_SCAN_BUTTON_SIZE -> floatingButton.updateSize(prefs.getInt(key, 60))
+            PREF_SHELF_BUTTON_SIZE -> shelfPickerButton.updateSize(prefs.getInt(key, 56))
+            PREF_ARTICLE_BUTTON_SIZE -> articleLookupButton.updateSize(prefs.getInt(key, 60))
+        }
     }
 
     override fun onCreate() {
@@ -74,11 +85,13 @@ class ScannerForegroundService : Service() {
         }
         startShelfPickerObserver()
         startArticleLookupObserver()
+        prefs.registerOnSharedPreferenceChangeListener(sizePrefListener)
     }
 
     override fun onDestroy() {
         super.onDestroy()
         isRunning = false
+        prefs.unregisterOnSharedPreferenceChangeListener(sizePrefListener)
         floatingButton.hide()
         shelfPickerButton.hide()
         articleLookupButton.hide()

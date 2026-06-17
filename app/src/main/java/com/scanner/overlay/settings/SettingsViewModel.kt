@@ -12,6 +12,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.scanner.overlay.BuildConfig
 import com.scanner.overlay.accessibility.ScannerAccessibilityService
+import com.scanner.overlay.scanner.ScanHistoryEntry
 import com.scanner.overlay.calibration.SewCalibration
 import com.scanner.overlay.service.ScannerForegroundService
 import com.scanner.overlay.service.SewCalibrationService
@@ -56,9 +57,13 @@ class SettingsViewModel @Inject constructor(
         private const val PREF_KEY_SEW_CONFIRM_Y = "sew_confirm_y"
         const val PREF_KEY_SHELF_PICKER_ENABLED = "shelf_picker_enabled"
         const val PREF_KEY_ARTICLE_LOOKUP_ENABLED = "article_lookup_enabled"
+        private const val PREF_KEY_SCAN_BUTTON_SIZE = "scan_button_size_dp"
+        private const val PREF_KEY_SHELF_BUTTON_SIZE = "shelf_button_size_dp"
+        private const val PREF_KEY_ARTICLE_BUTTON_SIZE = "article_button_size_dp"
         const val PREF_KEY_TAP_TO_FOCUS_ENABLED = "tap_to_focus_enabled"
         const val PREF_KEY_FOCUS_HINT_SHOWN = "focus_hint_shown"
         const val PREF_KEY_AUTO_FOCUS_ENABLED = "auto_focus_enabled"
+        private const val PREF_KEY_TTS_ENABLED = "tts_enabled"
     }
 
     private val _isFloatingButtonEnabled = MutableStateFlow(false)
@@ -83,11 +88,25 @@ class SettingsViewModel @Inject constructor(
     )
     val autoFocusEnabled: StateFlow<Boolean> = _autoFocusEnabled.asStateFlow()
 
+    private val _isTtsEnabled = MutableStateFlow(
+        prefs.getBoolean(PREF_KEY_TTS_ENABLED, false)
+    )
+    val isTtsEnabled: StateFlow<Boolean> = _isTtsEnabled.asStateFlow()
+
     private val _scanTimeoutMs = MutableStateFlow(prefs.getLong(PREF_KEY_SCAN_TIMEOUT, 45_000L))
     val scanTimeoutMs: StateFlow<Long> = _scanTimeoutMs.asStateFlow()
 
     private val _scanQuality = MutableStateFlow(prefs.getInt(PREF_KEY_SCAN_QUALITY, 1))
     val scanQuality: StateFlow<Int> = _scanQuality.asStateFlow()
+
+    private val _scanButtonSizeDp = MutableStateFlow(prefs.getInt(PREF_KEY_SCAN_BUTTON_SIZE, 60))
+    val scanButtonSizeDp: StateFlow<Int> = _scanButtonSizeDp.asStateFlow()
+
+    private val _shelfButtonSizeDp = MutableStateFlow(prefs.getInt(PREF_KEY_SHELF_BUTTON_SIZE, 56))
+    val shelfButtonSizeDp: StateFlow<Int> = _shelfButtonSizeDp.asStateFlow()
+
+    private val _articleButtonSizeDp = MutableStateFlow(prefs.getInt(PREF_KEY_ARTICLE_BUTTON_SIZE, 60))
+    val articleButtonSizeDp: StateFlow<Int> = _articleButtonSizeDp.asStateFlow()
 
     val isFloatingButtonEnabled: StateFlow<Boolean> = _isFloatingButtonEnabled.asStateFlow()
 
@@ -107,6 +126,9 @@ class SettingsViewModel @Inject constructor(
 
     private val _installedApps = MutableStateFlow<List<AppInfo>>(emptyList())
     val installedApps: StateFlow<List<AppInfo>> = _installedApps.asStateFlow()
+
+    private val _scanHistory = MutableStateFlow(ScanHistoryEntry.load(prefs))
+    val scanHistory: StateFlow<List<ScanHistoryEntry>> = _scanHistory.asStateFlow()
 
     val currentVersion: String = BuildConfig.VERSION_NAME
 
@@ -216,6 +238,21 @@ class SettingsViewModel @Inject constructor(
         prefs.edit().putInt(PREF_KEY_SCAN_QUALITY, quality).apply()
     }
 
+    fun setScanButtonSize(sizeDp: Int) {
+        _scanButtonSizeDp.value = sizeDp
+        prefs.edit().putInt(PREF_KEY_SCAN_BUTTON_SIZE, sizeDp).apply()
+    }
+
+    fun setShelfButtonSize(sizeDp: Int) {
+        _shelfButtonSizeDp.value = sizeDp
+        prefs.edit().putInt(PREF_KEY_SHELF_BUTTON_SIZE, sizeDp).apply()
+    }
+
+    fun setArticleButtonSize(sizeDp: Int) {
+        _articleButtonSizeDp.value = sizeDp
+        prefs.edit().putInt(PREF_KEY_ARTICLE_BUTTON_SIZE, sizeDp).apply()
+    }
+
     fun setShelfPickerEnabled(enabled: Boolean) {
         if (enabled && !_sewCalibration.value.isCalibrated) return
         if (_shelfPickerEnabled.value == enabled) return
@@ -239,6 +276,21 @@ class SettingsViewModel @Inject constructor(
         if (_autoFocusEnabled.value == enabled) return
         _autoFocusEnabled.value = enabled
         prefs.edit().putBoolean(PREF_KEY_AUTO_FOCUS_ENABLED, enabled).apply()
+    }
+
+    fun setTtsEnabled(enabled: Boolean) {
+        if (_isTtsEnabled.value == enabled) return
+        _isTtsEnabled.value = enabled
+        prefs.edit().putBoolean(PREF_KEY_TTS_ENABLED, enabled).apply()
+    }
+
+    fun refreshScanHistory() {
+        _scanHistory.value = ScanHistoryEntry.load(prefs)
+    }
+
+    fun clearScanHistory() {
+        ScanHistoryEntry.clear(prefs)
+        _scanHistory.value = emptyList()
     }
 
     fun wasFocusHintShown(): Boolean =

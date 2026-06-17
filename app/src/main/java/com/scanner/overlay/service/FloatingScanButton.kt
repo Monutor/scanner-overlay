@@ -27,7 +27,8 @@ class FloatingScanButton(
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val displayMetrics = context.resources.displayMetrics
 
-    private val buttonSizePx = (60 * displayMetrics.density).toInt()
+    private var buttonSizeDp: Int
+    private var buttonSizePx: Int
     private val defaultX: Int
     private val defaultY: Int
 
@@ -45,6 +46,8 @@ class FloatingScanButton(
     private val params: WindowManager.LayoutParams
 
     init {
+        buttonSizeDp = prefs.getInt(PREF_SIZE, DEFAULT_SIZE_DP)
+        buttonSizePx = (buttonSizeDp * displayMetrics.density).toInt()
         val marginPx = (16 * displayMetrics.density).toInt()
         defaultX = displayMetrics.widthPixels - buttonSizePx - marginPx
         defaultY = (100 * displayMetrics.density).toInt()
@@ -176,7 +179,25 @@ class FloatingScanButton(
             .apply()
     }
 
+    fun updateSize(sizeDp: Int) {
+        if (sizeDp == buttonSizeDp) return
+        buttonSizeDp = sizeDp
+        buttonSizePx = (sizeDp * displayMetrics.density).toInt()
+        prefs.edit().putInt(PREF_SIZE, sizeDp).apply()
+        params.width = buttonSizePx
+        params.height = buttonSizePx
+        params.x = clampX(params.x)
+        params.y = clampY(params.y)
+        if (isAdded) {
+            try {
+                windowManager.updateViewLayout(button, params)
+            } catch (_: Exception) {}
+        }
+    }
+
     companion object {
+        private const val PREF_SIZE = "scan_button_size_dp"
+        private const val DEFAULT_SIZE_DP = 60
         private const val PREF_X = "floating_button_x"
         private const val PREF_Y = "floating_button_y"
     }
