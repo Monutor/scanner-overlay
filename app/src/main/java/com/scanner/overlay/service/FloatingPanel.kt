@@ -131,7 +131,7 @@ class FloatingPanel(
             }
         }
         val arrow = TextView(context).apply {
-            text = if (isOpen) "\u25B6" else "\u25C0"
+            text = if (isOpen == (edge == Edge.LEFT)) "\u25B6" else "\u25C0"
             textSize = 28f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
@@ -156,10 +156,10 @@ class FloatingPanel(
                 setShape(GradientDrawable.RECTANGLE)
                 setColor(Color.parseColor("#F21E1E3C"))
                 setStroke(dp(1), Color.parseColor("#14FFFFFF"))
-                cornerRadii = if (edge == Edge.RIGHT)
-                    floatArrayOf(r, r, 0f, 0f, r, r, 0f, 0f)
-                else
-                    floatArrayOf(0f, 0f, r, r, 0f, 0f, r, r)
+            cornerRadii = if (edge == Edge.RIGHT)
+                floatArrayOf(r, r, 0f, 0f, r, r, 0f, 0f)
+            else
+                floatArrayOf(0f, 0f, r, r, r, r, 0f, 0f)
             }
         }
 
@@ -272,7 +272,7 @@ class FloatingPanel(
         val tabIndex = if (edge == Edge.RIGHT) 0 else 1
         if (root.childCount <= tabIndex) return
         val tab = root.getChildAt(tabIndex) as? LinearLayout ?: return
-        (tab.getChildAt(0) as? TextView)?.text = if (isOpen) "\u25B6" else "\u25C0"
+        (tab.getChildAt(0) as? TextView)?.text = if (isOpen == (edge == Edge.LEFT)) "\u25B6" else "\u25C0"
     }
 
     fun setEdge(newEdge: Edge) {
