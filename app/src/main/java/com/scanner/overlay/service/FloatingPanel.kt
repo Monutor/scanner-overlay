@@ -15,6 +15,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.animation.PathInterpolator
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -33,13 +34,13 @@ class FloatingPanel(
         private const val PREF_OPEN = "panel_open"
         private const val PREF_Y = "panel_panel_y"
         private const val PREF_EDGE = "panel_edge"
-        private const val PANEL_W_DP = 240
+        private const val PANEL_W_DP = 100
         private const val TAB_W_DP = 32
-        private const val TAB_H_DP = 80
+        private const val TAB_H_DP = 72
         private const val BTN_SIZE_DP = 56
         private const val PAD_DP = 20
         private const val GAP_DP = 12
-        private const val EDGE_MARGIN_DP = 4
+        private const val EDGE_MARGIN_DP = 0
         private const val ANIM_MS = 350L
     }
 
@@ -120,12 +121,15 @@ class FloatingPanel(
     }
 
     private fun buildTab(): View {
+        val r = dp(20).toFloat()
         val tab = LinearLayout(context).apply {
             layoutParams = LinearLayout.LayoutParams(
-                dp(TAB_W_DP), ViewGroup.LayoutParams.MATCH_PARENT
-            )
+                dp(TAB_W_DP), dp(TAB_H_DP)
+            ).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                if (edge == Edge.RIGHT) marginEnd = -dp(1) else marginStart = -dp(1)
+            }
             gravity = Gravity.CENTER
-            val r = dp(10).toFloat()
             background = GradientDrawable().apply {
                 setShape(GradientDrawable.RECTANGLE)
                 setColor(Color.parseColor("#F21E1E3C"))
@@ -138,7 +142,7 @@ class FloatingPanel(
         }
         val arrow = TextView(context).apply {
             text = if (isOpen == (edge == Edge.LEFT)) "\u25B6" else "\u25C0"
-            textSize = 28f
+            textSize = 16f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
         }
@@ -151,21 +155,21 @@ class FloatingPanel(
     }
 
     private fun buildPanelBody(): LinearLayout {
+        val r = dp(20).toFloat()
         val body = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(
                 dp(PANEL_W_DP), ViewGroup.LayoutParams.WRAP_CONTENT
             )
             setPadding(dp(PAD_DP), dp(PAD_DP), dp(PAD_DP), dp(PAD_DP))
-            val r = dp(20).toFloat()
             background = GradientDrawable().apply {
                 setShape(GradientDrawable.RECTANGLE)
                 setColor(Color.parseColor("#F21E1E3C"))
                 setStroke(dp(1), Color.parseColor("#14FFFFFF"))
-            cornerRadii = if (edge == Edge.RIGHT)
-                floatArrayOf(r, r, 0f, 0f, r, r, 0f, 0f)
-            else
-                floatArrayOf(0f, 0f, r, r, r, r, 0f, 0f)
+                cornerRadii = if (edge == Edge.RIGHT)
+                    floatArrayOf(r, r, 0f, 0f, 0f, 0f, r, r)
+                else
+                    floatArrayOf(0f, 0f, r, r, r, r, 0f, 0f)
             }
         }
 

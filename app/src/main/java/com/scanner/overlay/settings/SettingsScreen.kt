@@ -59,6 +59,7 @@ fun SettingsScreen(
     val isFloatingButtonEnabled by viewModel.isFloatingButtonEnabled.collectAsState()
     val scanTimeoutMs by viewModel.scanTimeoutMs.collectAsState()
     val scanQuality by viewModel.scanQuality.collectAsState()
+    val panelEdge by viewModel.panelEdge.collectAsState()
     val installedApps by viewModel.installedApps.collectAsState()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -143,7 +144,9 @@ fun SettingsScreen(
 
                 FloatingButtonsCard(
                     isFloatingButtonEnabled = isFloatingButtonEnabled,
-                    onToggleFloatingButton = { viewModel.toggleService() }
+                    onToggleFloatingButton = { viewModel.toggleService() },
+                    panelEdge = panelEdge,
+                    onEdgeChange = { viewModel.setPanelEdge(it) }
                 )
 
                 TtsToggleCard(
@@ -346,7 +349,9 @@ private fun SectionEyebrow(text: String) {
 @Composable
 private fun FloatingButtonsCard(
     isFloatingButtonEnabled: Boolean,
-    onToggleFloatingButton: () -> Unit
+    onToggleFloatingButton: () -> Unit,
+    panelEdge: String,
+    onEdgeChange: (String) -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -375,6 +380,44 @@ private fun FloatingButtonsCard(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+                EdgeSelector(
+                    panelEdge = panelEdge,
+                    onEdgeChange = onEdgeChange
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EdgeSelector(
+    panelEdge: String,
+    onEdgeChange: (String) -> Unit
+) {
+    val options = listOf("left" to "Слева", "right" to "Справа")
+    val selectedIndex = options.indexOfFirst { it.first == panelEdge }.coerceAtLeast(0)
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text(
+            text = "Расположение панели",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            fontWeight = FontWeight.Medium
+        )
+        Spacer(Modifier.height(8.dp))
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+            options.forEachIndexed { index, (value, label) ->
+                SegmentedButton(
+                    selected = index == selectedIndex,
+                    onClick = { onEdgeChange(value) },
+                    shape = SegmentedButtonDefaults.itemShape(
+                        index = index,
+                        count = options.size
+                    ),
+                    icon = {}
+                ) {
+                    Text(label, style = MaterialTheme.typography.labelLarge)
                 }
             }
         }

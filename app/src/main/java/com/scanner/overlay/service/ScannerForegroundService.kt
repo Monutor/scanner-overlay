@@ -32,14 +32,26 @@ class ScannerForegroundService : Service() {
         const val NOTIFICATION_ID = 1001
         const val ACTION_START = "com.scanner.overlay.START"
         const val ACTION_STOP = "com.scanner.overlay.STOP"
+        const val ACTION_SET_EDGE = "com.scanner.overlay.SET_EDGE"
+        const val EXTRA_EDGE = "edge"
         @Volatile
         var isRunning: Boolean = false
             private set
+        @Volatile
+        private var serviceInstance: ScannerForegroundService? = null
+
+        fun setEdge(edge: String) {
+            serviceInstance?.let { srv ->
+                val edgeEnum = if (edge == "left") FloatingPanel.Edge.LEFT else FloatingPanel.Edge.RIGHT
+                srv.floatingPanel.setEdge(edgeEnum)
+            }
+        }
     }
 
     override fun onCreate() {
         super.onCreate()
         isRunning = true
+        serviceInstance = this
         prefs.edit().putBoolean(PREF_KEY_SERVICE_RUNNING, true).apply()
         createNotificationChannel()
         floatingPanel = FloatingPanel(this, prefs)
@@ -76,6 +88,11 @@ class ScannerForegroundService : Service() {
                 floatingPanel.show()
             }
             ACTION_STOP -> stopSelf()
+            ACTION_SET_EDGE -> {
+                val edge = intent.getStringExtra(EXTRA_EDGE) ?: "right"
+                val edgeEnum = if (edge == "left") FloatingPanel.Edge.LEFT else FloatingPanel.Edge.RIGHT
+                floatingPanel.setEdge(edgeEnum)
+            }
             null -> {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.canDrawOverlays(this)) {
                     floatingPanel.show()

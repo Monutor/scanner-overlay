@@ -59,6 +59,7 @@ class SettingsViewModel @Inject constructor(
         const val PREF_KEY_FOCUS_HINT_SHOWN = "focus_hint_shown"
         const val PREF_KEY_AUTO_FOCUS_ENABLED = "auto_focus_enabled"
         private const val PREF_KEY_TTS_ENABLED = "tts_enabled"
+        private const val PREF_KEY_PANEL_EDGE = "panel_edge"
     }
 
     private val _isFloatingButtonEnabled = MutableStateFlow(false)
@@ -77,6 +78,11 @@ class SettingsViewModel @Inject constructor(
         prefs.getBoolean(PREF_KEY_TTS_ENABLED, false)
     )
     val isTtsEnabled: StateFlow<Boolean> = _isTtsEnabled.asStateFlow()
+
+    private val _panelEdge = MutableStateFlow(
+        prefs.getString(PREF_KEY_PANEL_EDGE, "right") ?: "right"
+    )
+    val panelEdge: StateFlow<String> = _panelEdge.asStateFlow()
 
     private val _scanTimeoutMs = MutableStateFlow(prefs.getLong(PREF_KEY_SCAN_TIMEOUT, 45_000L))
     val scanTimeoutMs: StateFlow<Long> = _scanTimeoutMs.asStateFlow()
@@ -230,6 +236,13 @@ class SettingsViewModel @Inject constructor(
         if (_isTtsEnabled.value == enabled) return
         _isTtsEnabled.value = enabled
         prefs.edit().putBoolean(PREF_KEY_TTS_ENABLED, enabled).apply()
+    }
+
+    fun setPanelEdge(edge: String) {
+        if (_panelEdge.value == edge) return
+        _panelEdge.value = edge
+        prefs.edit().putString(PREF_KEY_PANEL_EDGE, edge).apply()
+        ScannerForegroundService.setEdge(edge)
     }
 
     fun refreshScanHistory() {
