@@ -21,10 +21,8 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FlashOn
-import androidx.compose.material.icons.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.QrCode
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.*
@@ -52,8 +50,6 @@ import com.scanner.overlay.calibration.SupportedBrowsers
 import com.scanner.overlay.update.UpdateInfo
 
 private val BlueFab = Color(0xFF1976D2)
-private val OrangeFab = Color(0xFFFB8C00)
-private val GreenFab = Color(0xFF388E3C)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -98,14 +94,9 @@ fun SettingsScreen(
     val sewCalibration by viewModel.sewCalibration.collectAsState()
     val sewTestResult by viewModel.sewTestResult.collectAsState()
     val awaitingSewCalibration by viewModel.awaitingSewCalibration.collectAsState()
-    val shelfPickerEnabled by viewModel.shelfPickerEnabled.collectAsState()
-    val articleLookupEnabled by viewModel.articleLookupEnabled.collectAsState()
     val tapToFocusEnabled by viewModel.tapToFocusEnabled.collectAsState()
     val autoFocusEnabled by viewModel.autoFocusEnabled.collectAsState()
     val isTtsEnabled by viewModel.isTtsEnabled.collectAsState()
-    val scanButtonSizeDp by viewModel.scanButtonSizeDp.collectAsState()
-    val shelfButtonSizeDp by viewModel.shelfButtonSizeDp.collectAsState()
-    val articleButtonSizeDp by viewModel.articleButtonSizeDp.collectAsState()
     val scanHistory by viewModel.scanHistory.collectAsState()
 
     val grantedCount = listOf(cameraGranted, overlayGranted, accessibilityGranted).count { it }
@@ -152,26 +143,12 @@ fun SettingsScreen(
 
                 FloatingButtonsCard(
                     isFloatingButtonEnabled = isFloatingButtonEnabled,
-                    isShelfPickerEnabled = shelfPickerEnabled,
-                    isShelfPickerAvailable = isFloatingButtonEnabled && sewCalibration.isCalibrated,
-                    isArticleLookupEnabled = articleLookupEnabled,
-                    onToggleFloatingButton = { viewModel.toggleService() },
-                    onToggleShelfPicker = { viewModel.setShelfPickerEnabled(it) },
-                    onToggleArticleLookup = { viewModel.setArticleLookupEnabled(it) }
+                    onToggleFloatingButton = { viewModel.toggleService() }
                 )
 
                 TtsToggleCard(
                     enabled = isTtsEnabled,
                     onToggle = { viewModel.setTtsEnabled(it) }
-                )
-
-                ButtonSizeCard(
-                    scanSizeDp = scanButtonSizeDp,
-                    shelfSizeDp = shelfButtonSizeDp,
-                    articleSizeDp = articleButtonSizeDp,
-                    onScanSizeChange = { viewModel.setScanButtonSize(it) },
-                    onShelfSizeChange = { viewModel.setShelfButtonSize(it) },
-                    onArticleSizeChange = { viewModel.setArticleButtonSize(it) }
                 )
 
                 ScanHistoryCard(
@@ -369,12 +346,7 @@ private fun SectionEyebrow(text: String) {
 @Composable
 private fun FloatingButtonsCard(
     isFloatingButtonEnabled: Boolean,
-    isShelfPickerEnabled: Boolean,
-    isShelfPickerAvailable: Boolean,
-    isArticleLookupEnabled: Boolean,
-    onToggleFloatingButton: () -> Unit,
-    onToggleShelfPicker: (Boolean) -> Unit,
-    onToggleArticleLookup: (Boolean) -> Unit
+    onToggleFloatingButton: () -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -385,151 +357,27 @@ private fun FloatingButtonsCard(
         Column(modifier = Modifier.padding(vertical = 4.dp)) {
             CardHeader(
                 title = "Плавающие кнопки",
-                subtitle = "Отображаются поверх всех приложений"
+                subtitle = "Отображается поверх всех приложений"
             )
             FloatingToggleRow(
                 color = BlueFab,
                 icon = Icons.Default.CenterFocusStrong,
-                title = "Сканер",
-                subtitle = if (isFloatingButtonEnabled) "Синяя кнопка — открывает камеру" else "Скрыта",
+                title = "Панель кнопок",
+                subtitle = if (isFloatingButtonEnabled) "Панель с 4 кнопками — сканер, полка, SKU, ШК" else "Скрыта",
                 checked = isFloatingButtonEnabled,
                 enabled = true,
                 onCheckedChange = { onToggleFloatingButton() }
             )
-            DividerRow()
-            FloatingToggleRow(
-                color = OrangeFab,
-                icon = Icons.Default.FormatListBulleted,
-                title = "Выбор полки",
-                subtitle = when {
-                    !isFloatingButtonEnabled -> "Сначала включите «Сканер»"
-                    !isShelfPickerAvailable -> "Сначала откалибруйте SEW"
-                    isShelfPickerEnabled -> "Оранжевая кнопка — список полок с поиском"
-                    else -> "Оранжевая кнопка скрыта"
-                },
-                checked = isShelfPickerEnabled,
-                enabled = isShelfPickerAvailable,
-                onCheckedChange = onToggleShelfPicker
-            )
-            if (isShelfPickerEnabled) {
-                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    Text(
-                        text = "Открывает список полок с поиском. Выбор автоматически вводит штрих в SEW — удобно, когда в задании указана конкретная ячейка. Если ячейка не указана («любая полка в зоне»), отсканируйте штрих вручную как обычно.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            DividerRow()
-            FloatingToggleRow(
-                color = GreenFab,
-                icon = Icons.Default.Search,
-                title = "Поиск товаров по SKU",
-                subtitle = when {
-                    !isFloatingButtonEnabled -> "Сначала включите «Сканер»"
-                    isArticleLookupEnabled -> "Зелёная кнопка — поиск товаров по SKU"
-                    else -> "Зелёная кнопка скрыта"
-                },
-                checked = isArticleLookupEnabled,
-                enabled = isFloatingButtonEnabled,
-                onCheckedChange = onToggleArticleLookup
-            )
             if (isFloatingButtonEnabled) {
                 Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                     Text(
-                        text = "Открывает экран поиска товара по SKU, когда по названию или модели непонятно что и как выглядит",
+                        text = "Скользящая панель со всеми кнопками. Перетащите в любое место. Нажмите на стрелку, чтобы свернуть.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun ButtonSizeCard(
-    scanSizeDp: Int,
-    shelfSizeDp: Int,
-    articleSizeDp: Int,
-    onScanSizeChange: (Int) -> Unit,
-    onShelfSizeChange: (Int) -> Unit,
-    onArticleSizeChange: (Int) -> Unit,
-) {
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-        )
-    ) {
-        Column(modifier = Modifier.padding(vertical = 4.dp)) {
-            CardHeader(
-                title = "Размер кнопок",
-                subtitle = "От 40 до 96 dp, шаг 4 dp"
-            )
-            SizeSliderRow(
-                color = Color(0xFF1976D2),
-                label = "Сканер",
-                value = scanSizeDp,
-                onValueChange = onScanSizeChange
-            )
-            DividerRow()
-            SizeSliderRow(
-                color = Color(0xFFFB8C00),
-                label = "Выбор полки",
-                value = shelfSizeDp,
-                onValueChange = onShelfSizeChange
-            )
-            DividerRow()
-            SizeSliderRow(
-                color = Color(0xFF388E3C),
-                label = "Поиск артикула",
-                value = articleSizeDp,
-                onValueChange = onArticleSizeChange
-            )
-        }
-    }
-}
-
-@Composable
-private fun SizeSliderRow(
-    color: Color,
-    label: String,
-    value: Int,
-    onValueChange: (Int) -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            modifier = Modifier
-                .size(12.dp)
-                .clip(CircleShape)
-                .background(color)
-        )
-        Spacer(Modifier.width(12.dp))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.width(80.dp)
-        )
-        Slider(
-            value = value.toFloat(),
-            onValueChange = { onValueChange(it.toInt()) },
-            valueRange = 40f..96f,
-            steps = 13,
-            modifier = Modifier.weight(1f)
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text = "$value dp",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(44.dp)
-        )
     }
 }
 

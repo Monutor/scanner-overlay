@@ -16,16 +16,6 @@ import androidx.core.app.NotificationCompat
 import com.scanner.overlay.R
 import com.scanner.overlay.overlay.OverlayActivity
 import dagger.hilt.android.AndroidEntryPoint
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -34,13 +24,7 @@ class ScannerForegroundService : Service() {
     @Inject
     lateinit var prefs: SharedPreferences
 
-    private lateinit var floatingButton: FloatingScanButton
-    private lateinit var shelfPickerButton: ShelfPickerButton
-    private lateinit var articleLookupButton: ArticleLookupButton
-
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private var shelfObserverJob: Job? = null
-    private var articleObserverJob: Job? = null
+    private lateinit var floatingPanel: FloatingPanel
 
     companion object {
         private const val PREF_KEY_SERVICE_RUNNING = "service_running"
@@ -48,22 +32,9 @@ class ScannerForegroundService : Service() {
         const val NOTIFICATION_ID = 1001
         const val ACTION_START = "com.scanner.overlay.START"
         const val ACTION_STOP = "com.scanner.overlay.STOP"
-        const val PREF_KEY_SHELF_PICKER_ENABLED = "shelf_picker_enabled"
-        const val PREF_KEY_ARTICLE_LOOKUP_ENABLED = "article_lookup_enabled"
-        private const val PREF_SCAN_BUTTON_SIZE = "scan_button_size_dp"
-        private const val PREF_SHELF_BUTTON_SIZE = "shelf_button_size_dp"
-        private const val PREF_ARTICLE_BUTTON_SIZE = "article_button_size_dp"
         @Volatile
         var isRunning: Boolean = false
             private set
-    }
-
-    private val sizePrefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        when (key) {
-            PREF_SCAN_BUTTON_SIZE -> floatingButton.updateSize(prefs.getInt(key, 60))
-            PREF_SHELF_BUTTON_SIZE -> shelfPickerButton.updateSize(prefs.getInt(key, 56))
-            PREF_ARTICLE_BUTTON_SIZE -> articleLookupButton.updateSize(prefs.getInt(key, 60))
-        }
     }
 
     override fun onCreate() {
@@ -71,9 +42,7 @@ class ScannerForegroundService : Service() {
         isRunning = true
         prefs.edit().putBoolean(PREF_KEY_SERVICE_RUNNING, true).apply()
         createNotificationChannel()
-        floatingButton = FloatingScanButton(this, prefs)
-        shelfPickerButton = ShelfPickerButton(this, prefs)
-        articleLookupButton = ArticleLookupButton(this, prefs)
+        floatingPanel = FloatingPanel(this, prefs)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID,
@@ -83,20 +52,13 @@ class ScannerForegroundService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, createNotification())
         }
-        startShelfPickerObserver()
-        startArticleLookupObserver()
-        prefs.registerOnSharedPreferenceChangeListener(sizePrefListener)
     }
 
     override fun onDestroy() {
         super.onDestroy()
         isRunning = false
-        prefs.unregisterOnSharedPreferenceChangeListener(sizePrefListener)
-        floatingButton.hide()
-        shelfPickerButton.hide()
-        articleLookupButton.hide()
+        floatingPanel.hide()
         prefs.edit().putBoolean(PREF_KEY_SERVICE_RUNNING, false).apply()
-        serviceScope.cancel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -111,57 +73,17 @@ class ScannerForegroundService : Service() {
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                floatingButton.show()
+                floatingPanel.show()
             }
             ACTION_STOP -> stopSelf()
             null -> {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.canDrawOverlays(this)) {
-                    floatingButton.show()
+                    floatingPanel.show()
                 }
             }
         }
         return START_STICKY
     }
-
-    private fun startShelfPickerObserver() {
-        shelfObserverJob?.cancel()
-        shelfObserverJob = serviceScope.launch {
-            shelfPickerEnabledFlow().collectLatest { enabled ->
-                if (enabled) shelfPickerButton.show() else shelfPickerButton.hide()
-            }
-        }
-    }
-
-    private fun startArticleLookupObserver() {
-        articleObserverJob?.cancel()
-        articleObserverJob = serviceScope.launch {
-            articleLookupEnabledFlow().collectLatest { enabled ->
-                if (enabled) articleLookupButton.show() else articleLookupButton.hide()
-            }
-        }
-    }
-
-    private fun shelfPickerEnabledFlow() = callbackFlow {
-        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key == PREF_KEY_SHELF_PICKER_ENABLED) {
-                trySend(prefs.getBoolean(PREF_KEY_SHELF_PICKER_ENABLED, false))
-            }
-        }
-        prefs.registerOnSharedPreferenceChangeListener(listener)
-        trySend(prefs.getBoolean(PREF_KEY_SHELF_PICKER_ENABLED, false))
-        awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
-    }.distinctUntilChanged()
-
-    private fun articleLookupEnabledFlow() = callbackFlow {
-        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key == PREF_KEY_ARTICLE_LOOKUP_ENABLED) {
-                trySend(prefs.getBoolean(PREF_KEY_ARTICLE_LOOKUP_ENABLED, false))
-            }
-        }
-        prefs.registerOnSharedPreferenceChangeListener(listener)
-        trySend(prefs.getBoolean(PREF_KEY_ARTICLE_LOOKUP_ENABLED, false))
-        awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
-    }.distinctUntilChanged()
 
     private fun createNotification(): Notification {
         val scanIntent = Intent(this, OverlayActivity::class.java).apply {

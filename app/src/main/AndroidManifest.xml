@@ -64,6 +64,15 @@
             android:turnScreenOn="true"
             android:theme="@style/Theme.ScannerOverlay.Transparent" />
 
+        <activity
+            android:name=".settings.ArticleBarcodeActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:theme="@style/Theme.ScannerOverlay.Transparent" />
+
         <service
             android:name=".service.ScannerForegroundService"
             android:exported="false"

@@ -55,11 +55,6 @@ class SettingsViewModel @Inject constructor(
         private const val PREF_KEY_SEW_OPEN_MODAL_Y = "sew_open_modal_y"
         private const val PREF_KEY_SEW_CONFIRM_X = "sew_confirm_x"
         private const val PREF_KEY_SEW_CONFIRM_Y = "sew_confirm_y"
-        const val PREF_KEY_SHELF_PICKER_ENABLED = "shelf_picker_enabled"
-        const val PREF_KEY_ARTICLE_LOOKUP_ENABLED = "article_lookup_enabled"
-        private const val PREF_KEY_SCAN_BUTTON_SIZE = "scan_button_size_dp"
-        private const val PREF_KEY_SHELF_BUTTON_SIZE = "shelf_button_size_dp"
-        private const val PREF_KEY_ARTICLE_BUTTON_SIZE = "article_button_size_dp"
         const val PREF_KEY_TAP_TO_FOCUS_ENABLED = "tap_to_focus_enabled"
         const val PREF_KEY_FOCUS_HINT_SHOWN = "focus_hint_shown"
         const val PREF_KEY_AUTO_FOCUS_ENABLED = "auto_focus_enabled"
@@ -67,16 +62,6 @@ class SettingsViewModel @Inject constructor(
     }
 
     private val _isFloatingButtonEnabled = MutableStateFlow(false)
-
-    private val _shelfPickerEnabled = MutableStateFlow(
-        prefs.getBoolean(PREF_KEY_SHELF_PICKER_ENABLED, false)
-    )
-    val shelfPickerEnabled: StateFlow<Boolean> = _shelfPickerEnabled.asStateFlow()
-
-    private val _articleLookupEnabled = MutableStateFlow(
-        prefs.getBoolean(PREF_KEY_ARTICLE_LOOKUP_ENABLED, false)
-    )
-    val articleLookupEnabled: StateFlow<Boolean> = _articleLookupEnabled.asStateFlow()
 
     private val _tapToFocusEnabled = MutableStateFlow(
         prefs.getBoolean(PREF_KEY_TAP_TO_FOCUS_ENABLED, true)
@@ -98,15 +83,6 @@ class SettingsViewModel @Inject constructor(
 
     private val _scanQuality = MutableStateFlow(prefs.getInt(PREF_KEY_SCAN_QUALITY, 1))
     val scanQuality: StateFlow<Int> = _scanQuality.asStateFlow()
-
-    private val _scanButtonSizeDp = MutableStateFlow(prefs.getInt(PREF_KEY_SCAN_BUTTON_SIZE, 60))
-    val scanButtonSizeDp: StateFlow<Int> = _scanButtonSizeDp.asStateFlow()
-
-    private val _shelfButtonSizeDp = MutableStateFlow(prefs.getInt(PREF_KEY_SHELF_BUTTON_SIZE, 56))
-    val shelfButtonSizeDp: StateFlow<Int> = _shelfButtonSizeDp.asStateFlow()
-
-    private val _articleButtonSizeDp = MutableStateFlow(prefs.getInt(PREF_KEY_ARTICLE_BUTTON_SIZE, 60))
-    val articleButtonSizeDp: StateFlow<Int> = _articleButtonSizeDp.asStateFlow()
 
     val isFloatingButtonEnabled: StateFlow<Boolean> = _isFloatingButtonEnabled.asStateFlow()
 
@@ -236,34 +212,6 @@ class SettingsViewModel @Inject constructor(
         require(quality in 0..2) { "Quality must be 0, 1, or 2" }
         _scanQuality.value = quality
         prefs.edit().putInt(PREF_KEY_SCAN_QUALITY, quality).apply()
-    }
-
-    fun setScanButtonSize(sizeDp: Int) {
-        _scanButtonSizeDp.value = sizeDp
-        prefs.edit().putInt(PREF_KEY_SCAN_BUTTON_SIZE, sizeDp).apply()
-    }
-
-    fun setShelfButtonSize(sizeDp: Int) {
-        _shelfButtonSizeDp.value = sizeDp
-        prefs.edit().putInt(PREF_KEY_SHELF_BUTTON_SIZE, sizeDp).apply()
-    }
-
-    fun setArticleButtonSize(sizeDp: Int) {
-        _articleButtonSizeDp.value = sizeDp
-        prefs.edit().putInt(PREF_KEY_ARTICLE_BUTTON_SIZE, sizeDp).apply()
-    }
-
-    fun setShelfPickerEnabled(enabled: Boolean) {
-        if (enabled && !_sewCalibration.value.isCalibrated) return
-        if (_shelfPickerEnabled.value == enabled) return
-        _shelfPickerEnabled.value = enabled
-        prefs.edit().putBoolean(PREF_KEY_SHELF_PICKER_ENABLED, enabled).apply()
-    }
-
-    fun setArticleLookupEnabled(enabled: Boolean) {
-        if (_articleLookupEnabled.value == enabled) return
-        _articleLookupEnabled.value = enabled
-        prefs.edit().putBoolean(PREF_KEY_ARTICLE_LOOKUP_ENABLED, enabled).apply()
     }
 
     fun setTapToFocusEnabled(enabled: Boolean) {
