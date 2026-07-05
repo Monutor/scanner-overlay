@@ -86,6 +86,10 @@ object ArticleBarcodeDatabase {
         } catch (_: Exception) {}
     }
 
+    fun containsArticleCode(code: String): Boolean {
+        return seenArticleCodes.contains(code)
+    }
+
     fun searchByArticleCode(code: String): ProductItem? {
         return items.firstOrNull { it.articleCode == code }
     }

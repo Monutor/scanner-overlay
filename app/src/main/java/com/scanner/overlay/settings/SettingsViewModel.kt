@@ -47,6 +47,7 @@ sealed interface DbUpdateState {
     data object Downloading : DbUpdateState
     data class Ready(val newItems: List<ProductItem>) : DbUpdateState
     data object UpToDate : DbUpdateState
+    data class Added(val count: Int) : DbUpdateState
     data class Error(val message: String) : DbUpdateState
 }
 
@@ -516,7 +517,7 @@ class SettingsViewModel @Inject constructor(
 
     private fun parseRemoteCsv(text: String): List<ProductItem> {
         val result = mutableListOf<ProductItem>()
-        val seen = HashSet<String>()
+        val localSeen = HashSet<String>()
         val lines = text.lines()
         for (i in 1 until lines.size) {
             val line = lines[i].trim()
@@ -526,8 +527,9 @@ class SettingsViewModel @Inject constructor(
             val articleCode = parts[4].trim()
             val name = parts[5].trim()
             val barcode = parts[13].trim()
-            if (articleCode.isEmpty() || seen.contains(articleCode)) continue
-            seen.add(articleCode)
+            if (articleCode.isEmpty() || localSeen.contains(articleCode)) continue
+            if (ArticleBarcodeDatabase.containsArticleCode(articleCode)) continue
+            localSeen.add(articleCode)
             result.add(ProductItem(articleCode, name, barcode))
         }
         return result
@@ -538,7 +540,7 @@ class SettingsViewModel @Inject constructor(
         if (state !is DbUpdateState.Ready) return
         ArticleBarcodeDatabase.mergeExtra(state.newItems)
         ArticleBarcodeDatabase.persistExtra(app, state.newItems)
-        _dbUpdateState.value = DbUpdateState.Idle
+        _dbUpdateState.value = DbUpdateState.Added(state.newItems.size)
     }
 
     fun resetBarcodeDbUpdateState() {

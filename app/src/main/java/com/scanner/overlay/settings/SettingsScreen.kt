@@ -1464,11 +1464,19 @@ private fun BarcodeDbUpdateCard(
                                 title = { Text("Новые ШК (${s.newItems.size})") },
                                 text = {
                                     Column(Modifier.verticalScroll(rememberScrollState())) {
-                                        s.newItems.forEach { item ->
+                                        val display = s.newItems.take(40)
+                                        display.forEach { item ->
                                             Text(
                                                 "${item.articleCode} — ${item.name}",
                                                 style = MaterialTheme.typography.bodySmall,
                                                 modifier = Modifier.padding(vertical = 2.dp)
+                                            )
+                                        }
+                                        if (s.newItems.size > 40) {
+                                            Text(
+                                                "... и ещё ${s.newItems.size - 40}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
                                     }
@@ -1484,6 +1492,26 @@ private fun BarcodeDbUpdateCard(
                                     }
                                 }
                             )
+                        }
+                    }
+                    is DbUpdateState.Added -> {
+                        LaunchedEffect(Unit) {
+                            kotlinx.coroutines.delay(3000)
+                            onDismiss()
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.tertiary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("Добавлено: ${s.count}")
                         }
                     }
                     is DbUpdateState.UpToDate -> {
