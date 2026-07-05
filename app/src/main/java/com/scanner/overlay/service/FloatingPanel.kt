@@ -43,7 +43,7 @@ class FloatingPanel(
         private const val ANIM_MS = 350L
     }
 
-    private var edge: Edge
+    private var edge: Edge = Edge.RIGHT
     private var isOpen = true
     private var isAnimating = false
     private var lastTapTime = 0L
@@ -56,11 +56,6 @@ class FloatingPanel(
     private var params: WindowManager.LayoutParams? = null
 
     private val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-
-    init {
-        val saved = prefs.getString(PREF_EDGE, "right") ?: "right"
-        edge = if (saved == "left") Edge.LEFT else Edge.RIGHT
-    }
 
     fun show() {
         if (rootView != null) return
@@ -83,11 +78,22 @@ class FloatingPanel(
             y = sy
         }
         rootView = root
-        wm.addView(root, params!!)
+        try {
+            wm.addView(root, params!!)
+        } catch (_: Exception) {
+            rootView = null
+            params = null
+        }
     }
 
     fun hide() {
-        rootView?.let { wm.removeView(it) }
+        isAnimating = false
+        rootView?.let {
+            try {
+                wm.removeView(it)
+            } catch (_: Exception) {
+            }
+        }
         rootView = null
         params = null
     }
@@ -253,7 +259,10 @@ class FloatingPanel(
                 if (!isDragging) isDragging = Math.abs(dy) > 10
                 if (isDragging) {
                     p.y = (dragStartY + dy).coerceIn(0, maxY())
-                    wm.updateViewLayout(rootView!!, p)
+                    try {
+                        wm.updateViewLayout(rootView!!, p)
+                    } catch (_: Exception) {
+                    }
                 }
             }
             MotionEvent.ACTION_UP -> {
