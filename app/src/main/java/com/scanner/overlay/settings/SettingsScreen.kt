@@ -45,6 +45,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.scanner.overlay.R
 import com.scanner.overlay.calibration.SewCalibration
+import com.scanner.overlay.scanner.ProductItem
 import com.scanner.overlay.scanner.ScanHistoryEntry
 import com.scanner.overlay.calibration.SupportedBrowsers
 import com.scanner.overlay.update.UpdateInfo
@@ -60,6 +61,8 @@ fun SettingsScreen(
     val scanTimeoutMs by viewModel.scanTimeoutMs.collectAsState()
     val scanQuality by viewModel.scanQuality.collectAsState()
     val panelEdge by viewModel.panelEdge.collectAsState()
+    val btnSize by viewModel.btnSize.collectAsState()
+    val panelOpacity by viewModel.panelOpacity.collectAsState()
     val installedApps by viewModel.installedApps.collectAsState()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -91,6 +94,7 @@ fun SettingsScreen(
     }
 
     val updateState by viewModel.updateState.collectAsState()
+    val dbUpdateState by viewModel.dbUpdateState.collectAsState()
     val currentVersion = viewModel.currentVersion
     val sewCalibration by viewModel.sewCalibration.collectAsState()
     val sewTestResult by viewModel.sewTestResult.collectAsState()
@@ -140,13 +144,24 @@ fun SettingsScreen(
                     updateAvailable = updateState is UpdateUiState.Available
                 )
 
+                BarcodeDbUpdateCard(
+                    state = dbUpdateState,
+                    onDownload = { viewModel.downloadBarcodeDb() },
+                    onApply = { viewModel.applyBarcodeDbUpdate() },
+                    onDismiss = { viewModel.resetBarcodeDbUpdateState() }
+                )
+
                 SectionEyebrow("Поверхность")
 
                 FloatingButtonsCard(
                     isFloatingButtonEnabled = isFloatingButtonEnabled,
                     onToggleFloatingButton = { viewModel.toggleService() },
                     panelEdge = panelEdge,
-                    onEdgeChange = { viewModel.setPanelEdge(it) }
+                    onEdgeChange = { viewModel.setPanelEdge(it) },
+                    btnSize = btnSize,
+                    onBtnSizeChange = { viewModel.setBtnSize(it) },
+                    panelOpacity = panelOpacity,
+                    onOpacityChange = { viewModel.setPanelOpacity(it) }
                 )
 
                 TtsToggleCard(
@@ -351,7 +366,11 @@ private fun FloatingButtonsCard(
     isFloatingButtonEnabled: Boolean,
     onToggleFloatingButton: () -> Unit,
     panelEdge: String,
-    onEdgeChange: (String) -> Unit
+    onEdgeChange: (String) -> Unit,
+    btnSize: Int,
+    onBtnSizeChange: (Int) -> Unit,
+    panelOpacity: Float,
+    onOpacityChange: (Float) -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -385,8 +404,92 @@ private fun FloatingButtonsCard(
                     panelEdge = panelEdge,
                     onEdgeChange = onEdgeChange
                 )
+                BtnSizeSlider(
+                    btnSize = btnSize,
+                    onBtnSizeChange = onBtnSizeChange
+                )
+                OpacitySlider(
+                    opacity = panelOpacity,
+                    onOpacityChange = onOpacityChange
+                )
             }
         }
+    }
+}
+
+@Composable
+private fun BtnSizeSlider(
+    btnSize: Int,
+    onBtnSizeChange: (Int) -> Unit
+) {
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text(
+            text = "Размер кнопок",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            fontWeight = FontWeight.Medium
+        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("36", style = MaterialTheme.typography.labelSmall)
+            Slider(
+                value = btnSize.toFloat(),
+                onValueChange = { onBtnSizeChange(it.toInt()) },
+                valueRange = 36f..70f,
+                steps = 33,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 8.dp)
+            )
+            Text("70", style = MaterialTheme.typography.labelSmall)
+        }
+        Text(
+            text = "${btnSize}dp",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun OpacitySlider(
+    opacity: Float,
+    onOpacityChange: (Float) -> Unit
+) {
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text(
+            text = "Прозрачность панели",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            fontWeight = FontWeight.Medium
+        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("30%", style = MaterialTheme.typography.labelSmall)
+            Slider(
+                value = opacity,
+                onValueChange = { onOpacityChange(it) },
+                valueRange = 0.15f..1f,
+                steps = 16,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 8.dp)
+            )
+            Text("100%", style = MaterialTheme.typography.labelSmall)
+        }
+        Text(
+            text = "${(opacity * 100).toInt()}%",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = TextAlign.Center
+        )
     }
 }
 
@@ -1313,6 +1416,108 @@ private fun UpdateCard(
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun BarcodeDbUpdateCard(
+    state: DbUpdateState,
+    onDownload: () -> Unit,
+    onApply: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+    ) {
+        Column {
+            CardHeader(
+                title = "База ШК",
+                subtitle = "Товарные штрихкоды"
+            )
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                when (val s = state) {
+                    is DbUpdateState.Idle -> {
+                        FilledTonalButton(
+                            onClick = onDownload,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Загрузить базу ШК товаров", style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
+                    is DbUpdateState.Downloading -> {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(12.dp))
+                            Text("Загрузка...")
+                        }
+                    }
+                    is DbUpdateState.Ready -> {
+                        var showDialog by remember { mutableStateOf(true) }
+                        if (showDialog) {
+                            AlertDialog(
+                                onDismissRequest = { showDialog = false; onDismiss() },
+                                title = { Text("Новые ШК (${s.newItems.size})") },
+                                text = {
+                                    Column(Modifier.verticalScroll(rememberScrollState())) {
+                                        s.newItems.forEach { item ->
+                                            Text(
+                                                "${item.articleCode} — ${item.name}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                modifier = Modifier.padding(vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                },
+                                confirmButton = {
+                                    TextButton(onClick = { showDialog = false; onApply() }) {
+                                        Text("Добавить")
+                                    }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = { showDialog = false; onDismiss() }) {
+                                        Text("Отмена")
+                                    }
+                                }
+                            )
+                        }
+                    }
+                    is DbUpdateState.UpToDate -> {
+                        LaunchedEffect(Unit) {
+                            kotlinx.coroutines.delay(2000)
+                            onDismiss()
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.tertiary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("База актуальна")
+                        }
+                    }
+                    is DbUpdateState.Error -> {
+                        Text(
+                            text = s.message,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 

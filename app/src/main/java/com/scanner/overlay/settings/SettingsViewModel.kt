@@ -12,6 +12,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.scanner.overlay.BuildConfig
 import com.scanner.overlay.accessibility.ScannerAccessibilityService
+import com.scanner.overlay.scanner.ArticleBarcodeDatabase
+import com.scanner.overlay.scanner.ProductItem
 import com.scanner.overlay.scanner.ScanHistoryEntry
 import com.scanner.overlay.calibration.SewCalibration
 import com.scanner.overlay.service.ScannerForegroundService
@@ -29,6 +31,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
+import java.net.URL
 
 sealed interface UpdateUiState {
     data object Idle : UpdateUiState
@@ -37,6 +40,14 @@ sealed interface UpdateUiState {
     data class Available(val info: UpdateInfo) : UpdateUiState
     data object Downloading : UpdateUiState
     data class Error(val message: String) : UpdateUiState
+}
+
+sealed interface DbUpdateState {
+    data object Idle : DbUpdateState
+    data object Downloading : DbUpdateState
+    data class Ready(val newItems: List<ProductItem>) : DbUpdateState
+    data object UpToDate : DbUpdateState
+    data class Error(val message: String) : DbUpdateState
 }
 
 @HiltViewModel
@@ -60,6 +71,8 @@ class SettingsViewModel @Inject constructor(
         const val PREF_KEY_AUTO_FOCUS_ENABLED = "auto_focus_enabled"
         private const val PREF_KEY_TTS_ENABLED = "tts_enabled"
         private const val PREF_KEY_PANEL_EDGE = "panel_edge"
+        private const val PREF_KEY_BTN_SIZE = "panel_btn_size"
+        private const val PREF_KEY_OPACITY = "panel_opacity"
     }
 
     private val _isFloatingButtonEnabled = MutableStateFlow(false)
@@ -84,6 +97,12 @@ class SettingsViewModel @Inject constructor(
     )
     val panelEdge: StateFlow<String> = _panelEdge.asStateFlow()
 
+    private val _btnSize = MutableStateFlow(prefs.getInt(PREF_KEY_BTN_SIZE, 56))
+    val btnSize: StateFlow<Int> = _btnSize.asStateFlow()
+
+    private val _panelOpacity = MutableStateFlow(prefs.getFloat(PREF_KEY_OPACITY, 1f))
+    val panelOpacity: StateFlow<Float> = _panelOpacity.asStateFlow()
+
     private val _scanTimeoutMs = MutableStateFlow(prefs.getLong(PREF_KEY_SCAN_TIMEOUT, 45_000L))
     val scanTimeoutMs: StateFlow<Long> = _scanTimeoutMs.asStateFlow()
 
@@ -94,6 +113,9 @@ class SettingsViewModel @Inject constructor(
 
     private val _updateState = MutableStateFlow<UpdateUiState>(UpdateUiState.Idle)
     val updateState: StateFlow<UpdateUiState> = _updateState.asStateFlow()
+
+    private val _dbUpdateState = MutableStateFlow<DbUpdateState>(DbUpdateState.Idle)
+    val dbUpdateState: StateFlow<DbUpdateState> = _dbUpdateState.asStateFlow()
 
     private val _sewCalibration = MutableStateFlow(readSewCalibration())
     val sewCalibration: StateFlow<SewCalibration> = _sewCalibration.asStateFlow()
@@ -243,6 +265,21 @@ class SettingsViewModel @Inject constructor(
         _panelEdge.value = edge
         prefs.edit().putString(PREF_KEY_PANEL_EDGE, edge).apply()
         ScannerForegroundService.setEdge(edge)
+    }
+
+    fun setBtnSize(size: Int) {
+        if (_btnSize.value == size) return
+        _btnSize.value = size
+        prefs.edit().putInt(PREF_KEY_BTN_SIZE, size).apply()
+        ScannerForegroundService.setBtnSize(size)
+    }
+
+    fun setPanelOpacity(value: Float) {
+        val clamped = value.coerceIn(0.15f, 1f)
+        if (_panelOpacity.value == clamped) return
+        _panelOpacity.value = clamped
+        prefs.edit().putFloat(PREF_KEY_OPACITY, clamped).apply()
+        ScannerForegroundService.setPanelOpacity(clamped)
     }
 
     fun refreshScanHistory() {
@@ -452,5 +489,59 @@ class SettingsViewModel @Inject constructor(
 
     fun resetUpdateState() {
         _updateState.value = UpdateUiState.Idle
+    }
+
+    fun downloadBarcodeDb() {
+        if (_dbUpdateState.value is DbUpdateState.Downloading) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _dbUpdateState.value = DbUpdateState.Downloading
+            try {
+                val url = URL("https://raw.githubusercontent.com/Monutor/scanner-overlay/master/app/src/main/assets/barcode-products.csv")
+                val text = url.readText()
+                val newItems = parseRemoteCsv(text)
+                withContext(Dispatchers.Main) {
+                    if (newItems.isEmpty()) {
+                        _dbUpdateState.value = DbUpdateState.UpToDate
+                    } else {
+                        _dbUpdateState.value = DbUpdateState.Ready(newItems)
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _dbUpdateState.value = DbUpdateState.Error(e.message ?: "Неизвестная ошибка")
+                }
+            }
+        }
+    }
+
+    private fun parseRemoteCsv(text: String): List<ProductItem> {
+        val result = mutableListOf<ProductItem>()
+        val seen = HashSet<String>()
+        val lines = text.lines()
+        for (i in 1 until lines.size) {
+            val line = lines[i].trim()
+            if (line.isEmpty()) continue
+            val parts = line.split(";")
+            if (parts.size < 14) continue
+            val articleCode = parts[4].trim()
+            val name = parts[5].trim()
+            val barcode = parts[13].trim()
+            if (articleCode.isEmpty() || seen.contains(articleCode)) continue
+            seen.add(articleCode)
+            result.add(ProductItem(articleCode, name, barcode))
+        }
+        return result
+    }
+
+    fun applyBarcodeDbUpdate() {
+        val state = _dbUpdateState.value
+        if (state !is DbUpdateState.Ready) return
+        ArticleBarcodeDatabase.mergeExtra(state.newItems)
+        ArticleBarcodeDatabase.persistExtra(app, state.newItems)
+        _dbUpdateState.value = DbUpdateState.Idle
+    }
+
+    fun resetBarcodeDbUpdateState() {
+        _dbUpdateState.value = DbUpdateState.Idle
     }
 }

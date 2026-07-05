@@ -21,6 +21,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import com.scanner.overlay.R
 import com.scanner.overlay.overlay.OverlayActivity
+import com.scanner.overlay.settings.ArticleBarcodeActivity
 import com.scanner.overlay.settings.ArticleLookupActivity
 import com.scanner.overlay.settings.ShelfPickerActivity
 
@@ -34,10 +35,10 @@ class FloatingPanel(
         private const val PREF_OPEN = "panel_open"
         private const val PREF_Y = "panel_panel_y"
         private const val PREF_EDGE = "panel_edge"
-        private const val PANEL_W_DP = 100
+        const val PREF_BTN_SIZE = "panel_btn_size"
+        const val PREF_OPACITY = "panel_opacity"
         private const val TAB_W_DP = 32
         private const val TAB_H_DP = 72
-        private const val BTN_SIZE_DP = 56
         private const val PAD_DP = 20
         private const val GAP_DP = 12
         private const val EDGE_MARGIN_DP = 0
@@ -55,17 +56,23 @@ class FloatingPanel(
     private var isDragging = false
     private var rootView: View? = null
     private var params: WindowManager.LayoutParams? = null
+    private var btnSizeDp = 56
+    private var opacity = 1f
 
     private val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+
+    private val bodyWidthDp: Int get() = btnSizeDp + PAD_DP * 2
 
     fun show() {
         if (rootView != null) return
         isOpen = prefs.getBoolean(PREF_OPEN, true)
+        btnSizeDp = prefs.getInt(PREF_BTN_SIZE, 56)
+        opacity = prefs.getFloat(PREF_OPACITY, 1f)
         val savedEdge = prefs.getString(PREF_EDGE, "right") ?: "right"
         edge = if (savedEdge == "left") Edge.LEFT else Edge.RIGHT
         val sy = prefs.getInt(PREF_Y, defaultY())
         val root = buildPanel()
-        val totalW = dp(PANEL_W_DP + TAB_W_DP)
+        val totalW = dp(bodyWidthDp + TAB_W_DP)
         params = WindowManager.LayoutParams(
             totalW, ViewGroup.LayoutParams.WRAP_CONTENT,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
@@ -79,6 +86,7 @@ class FloatingPanel(
             y = sy
         }
         rootView = root
+        root.alpha = opacity
         try {
             wm.addView(root, params!!)
         } catch (_: Exception) {
@@ -103,7 +111,7 @@ class FloatingPanel(
         val root = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = ViewGroup.LayoutParams(
-                dp(PANEL_W_DP + TAB_W_DP),
+                dp(bodyWidthDp + TAB_W_DP),
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
@@ -159,7 +167,7 @@ class FloatingPanel(
         val body = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(
-                dp(PANEL_W_DP), ViewGroup.LayoutParams.WRAP_CONTENT
+                dp(bodyWidthDp), ViewGroup.LayoutParams.WRAP_CONTENT
             )
             setPadding(dp(PAD_DP), dp(PAD_DP), dp(PAD_DP), dp(PAD_DP))
             background = GradientDrawable().apply {
@@ -175,7 +183,7 @@ class FloatingPanel(
 
         data class Btn(val icon: Int, val color: String, val label: String)
         val buttons = listOf(
-            Btn(R.drawable.ic_launcher_foreground, "#1976D2", "Сканер"),
+            Btn(R.drawable.ic_scanner, "#1976D2", "Сканер"),
             Btn(R.drawable.ic_shelf, "#FB8C00", "Полка"),
             Btn(R.drawable.ic_article, "#388E3C", "Артикул"),
             Btn(R.drawable.ic_article_barcode, "#7B1FA2", "ШК")
@@ -188,11 +196,11 @@ class FloatingPanel(
             }
 
             val img = ImageView(context).apply {
-                layoutParams = LinearLayout.LayoutParams(dp(BTN_SIZE_DP), dp(BTN_SIZE_DP))
+                layoutParams = LinearLayout.LayoutParams(dp(btnSizeDp), dp(btnSizeDp))
                 scaleType = ImageView.ScaleType.CENTER_INSIDE
                 setImageResource(btn.icon)
                 setColorFilter(Color.WHITE)
-                setPadding(dp(12), dp(12), dp(12), dp(12))
+                setPadding(dp(8), dp(8), dp(8), dp(8))
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                     elevation = 6f
                 }
@@ -206,7 +214,7 @@ class FloatingPanel(
 
             val lbl = TextView(context).apply {
                 text = btn.label
-                textSize = 10f
+                textSize = 7f
                 gravity = Gravity.CENTER_HORIZONTAL
                 setTextColor(Color.parseColor("#999999"))
             }
@@ -294,6 +302,18 @@ class FloatingPanel(
         rebuild()
     }
 
+    fun setBtnSize(size: Int) {
+        btnSizeDp = size
+        prefs.edit().putInt(PREF_BTN_SIZE, size).apply()
+        rebuild()
+    }
+
+    fun setOpacity(value: Float) {
+        opacity = value
+        prefs.edit().putFloat(PREF_OPACITY, value).apply()
+        rootView?.alpha = value
+    }
+
     fun getEdge(): Edge = edge
 
     private fun rebuild() {
@@ -311,7 +331,7 @@ class FloatingPanel(
             0 -> Intent(context, OverlayActivity::class.java)
             1 -> Intent(context, ShelfPickerActivity::class.java)
             2 -> Intent(context, ArticleLookupActivity::class.java)
-            3 -> Intent(context, ArticleLookupActivity::class.java).putExtra("extra_barcode_focus", true)
+            3 -> Intent(context, ArticleBarcodeActivity::class.java)
             else -> return
         }.apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
@@ -320,13 +340,13 @@ class FloatingPanel(
     }
 
     private fun calcOpenX(): Int = when (edge) {
-        Edge.RIGHT -> scrW - dp(PANEL_W_DP + TAB_W_DP) - dp(EDGE_MARGIN_DP)
+        Edge.RIGHT -> scrW - dp(bodyWidthDp + TAB_W_DP) - dp(EDGE_MARGIN_DP)
         Edge.LEFT -> dp(EDGE_MARGIN_DP)
     }
 
     private fun calcClosedX(): Int = when (edge) {
         Edge.RIGHT -> scrW - dp(TAB_W_DP) - dp(EDGE_MARGIN_DP)
-        Edge.LEFT -> -dp(PANEL_W_DP) + dp(EDGE_MARGIN_DP)
+        Edge.LEFT -> -dp(bodyWidthDp) + dp(EDGE_MARGIN_DP)
     }
 
     private fun dp(v: Number): Int = (v.toFloat() * density).toInt()

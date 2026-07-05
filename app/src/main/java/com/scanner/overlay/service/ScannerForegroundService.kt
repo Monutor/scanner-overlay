@@ -46,6 +46,18 @@ class ScannerForegroundService : Service() {
                 srv.floatingPanel.setEdge(edgeEnum)
             }
         }
+
+        fun setBtnSize(size: Int) {
+            serviceInstance?.let { srv ->
+                srv.floatingPanel.setBtnSize(size)
+            }
+        }
+
+        fun setPanelOpacity(value: Float) {
+            serviceInstance?.let { srv ->
+                srv.floatingPanel.setOpacity(value)
+            }
+        }
     }
 
     override fun onCreate() {

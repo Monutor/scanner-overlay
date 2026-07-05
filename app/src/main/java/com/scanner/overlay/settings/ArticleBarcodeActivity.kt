@@ -7,8 +7,12 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -19,12 +23,16 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.scanner.overlay.scanner.ArticleBarcodeDatabase
 import com.scanner.overlay.scanner.ProductItem
+import com.scanner.overlay.util.BarcodeGenerator
 import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
@@ -41,8 +49,7 @@ class ArticleBarcodeActivity : ComponentActivity() {
 
 private sealed interface BarcodeState {
     data object Empty : BarcodeState
-    data object NotFound : BarcodeState
-    data class Found(val item: ProductItem) : BarcodeState
+    data class Results(val found: List<ProductItem>, val notFound: List<String>) : BarcodeState
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -53,10 +60,15 @@ private fun ArticleBarcodeScreen() {
     var state by remember { mutableStateOf<BarcodeState>(BarcodeState.Empty) }
 
     val doSearch: () -> Unit = {
-        val q = query.trim()
-        if (q.isNotEmpty()) {
-            val result = ArticleBarcodeDatabase.searchByArticleCode(q)
-            state = if (result != null) BarcodeState.Found(result) else BarcodeState.NotFound
+        val codes = query.split(",").map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (codes.isNotEmpty()) {
+            val found = mutableListOf<ProductItem>()
+            val notFound = mutableListOf<String>()
+            for (code in codes) {
+                val item = ArticleBarcodeDatabase.searchByArticleCode(code)
+                if (item != null) found.add(item) else notFound.add(code)
+            }
+            state = BarcodeState.Results(found, notFound)
         }
     }
 
@@ -88,12 +100,14 @@ private fun ArticleBarcodeScreen() {
                     onValueChange = { query = it },
                     label = { Text("Артикул") },
                     singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = { doSearch() }),
                     modifier = Modifier.weight(1f)
                 )
                 FilledIconButton(
-                    onClick = doSearch
+                    onClick = doSearch,
+                    modifier = Modifier.size(48.dp),
+                    shape = CircleShape
                 ) {
                     Icon(Icons.Default.Search, contentDescription = "Найти")
                 }
@@ -115,56 +129,76 @@ private fun ArticleBarcodeScreen() {
                     }
                 }
 
-                is BarcodeState.NotFound -> {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
+                is BarcodeState.Results -> {
+                    Column(
+                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text(
-                            "Товар с артикулом «$query» не найден",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    }
-                }
+                        if (s.found.isEmpty() && s.notFound.isEmpty()) {
+                            Text(
+                                "Нет результатов",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
 
-                is BarcodeState.Found -> {
-                    val item = s.item
-                    ElevatedCard(
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Text(
-                                text = item.name,
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                text = "Артикул: ${item.articleCode}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = "ШК: ${item.barcode}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Button(
-                                onClick = {
-                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                    clipboard.setPrimaryClip(ClipData.newPlainText("barcode", item.barcode))
-                                    Toast.makeText(context, "ШК скопирован: ${item.barcode}", Toast.LENGTH_SHORT).show()
-                                },
+                        s.found.forEach { item ->
+                            ElevatedCard(
+                                shape = RoundedCornerShape(16.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Icon(Icons.Default.ContentCopy, contentDescription = null)
-                                Spacer(Modifier.width(8.dp))
-                                Text("Копировать ШК")
+                                Column(
+                                    modifier = Modifier.padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        text = item.name,
+                                        style = MaterialTheme.typography.titleLarge,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = "Артикул: ${item.articleCode}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = "ШК: ${item.barcode}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    val barcodeBmp = remember(item.barcode) {
+                                        BarcodeGenerator.ean13Bitmap(item.barcode, 300, 80)
+                                    }
+                                    if (barcodeBmp != null) {
+                                        Image(
+                                            bitmap = barcodeBmp.asImageBitmap(),
+                                            contentDescription = "Штрихкод",
+                                            modifier = Modifier.fillMaxWidth().height(72.dp),
+                                            contentScale = ContentScale.Fit
+                                        )
+                                    }
+                                    Button(
+                                        onClick = {
+                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            clipboard.setPrimaryClip(ClipData.newPlainText("barcode", item.barcode))
+                                            Toast.makeText(context, "ШК скопирован: ${item.barcode}", Toast.LENGTH_SHORT).show()
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Icon(Icons.Default.ContentCopy, contentDescription = null)
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("Копировать ШК")
+                                    }
+                                }
                             }
+                        }
+
+                        s.notFound.forEach { code ->
+                            Text(
+                                "Артикул «$code» не найден",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error
+                            )
                         }
                     }
                 }

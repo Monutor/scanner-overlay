@@ -16,8 +16,8 @@ android {
         applicationId = "com.scanner.overlay"
         minSdk = 26
         targetSdk = 36
-        versionCode = 21
-        versionName = "1.11.0"
+        versionCode = 22
+        versionName = "1.12.0"
     }
 
     signingConfigs {
@@ -86,4 +86,5 @@ dependencies {
     implementation(libs.camerax.view)
     implementation(libs.mlkit.barcode.scanning)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.zxing.core)
 }
