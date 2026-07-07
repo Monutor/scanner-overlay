@@ -199,8 +199,9 @@ private fun ShelfPickerScreen(
 
     val favorites = remember(favoritesVersion) { favoritesStore.getAll() }
     val q = query.trim().lowercase()
+    val qNorm = q.replace("-", "")
     val searchFilter: (WarehouseItem) -> Boolean = {
-        q.isEmpty() || it.name.lowercase().contains(q)
+        q.isEmpty() || it.name.lowercase().replace("-", "").contains(qNorm)
     }
     val sectionFilter: (WarehouseItem) -> Boolean = {
         selectedSection == null || it.section == selectedSection

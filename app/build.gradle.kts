@@ -18,6 +18,11 @@ android {
         targetSdk = 36
         versionCode = 23
         versionName = "1.13.0"
+        val token = rootProject.file("local.properties").takeIf { it.exists() }?.let {
+            val p = Properties().also { it.load(it.inputStream()) }
+            p.getProperty("github.token", "")
+        } ?: ""
+        buildConfigField("String", "GITHUB_TOKEN", "\"$token\"")
     }
 
     signingConfigs {

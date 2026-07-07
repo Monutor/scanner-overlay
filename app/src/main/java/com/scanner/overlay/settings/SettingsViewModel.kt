@@ -13,11 +13,14 @@ import androidx.lifecycle.viewModelScope
 import com.scanner.overlay.BuildConfig
 import com.scanner.overlay.accessibility.ScannerAccessibilityService
 import com.scanner.overlay.scanner.ArticleBarcodeDatabase
+import com.scanner.overlay.scanner.BarcodeDatabase
+import com.scanner.overlay.scanner.ProductImporter
 import com.scanner.overlay.scanner.ProductItem
 import com.scanner.overlay.scanner.ScanHistoryEntry
 import com.scanner.overlay.calibration.SewCalibration
 import com.scanner.overlay.service.ScannerForegroundService
 import com.scanner.overlay.service.SewCalibrationService
+import com.scanner.overlay.sync.GithubDatabaseManager
 import com.scanner.overlay.update.AutoUpdateManager
 import com.scanner.overlay.update.UpdateInfo
 import com.scanner.overlay.update.UpdateResult
@@ -42,14 +45,19 @@ sealed interface UpdateUiState {
     data class Error(val message: String) : UpdateUiState
 }
 
-sealed interface DbUpdateState {
-    data object Idle : DbUpdateState
-    data object Downloading : DbUpdateState
-    data class Ready(val newItems: List<ProductItem>) : DbUpdateState
-    data object UpToDate : DbUpdateState
-    data class Added(val count: Int) : DbUpdateState
-    data class Error(val message: String) : DbUpdateState
+sealed interface DbManagerState {
+    data object Idle : DbManagerState
+    data object Importing : DbManagerState
+    data object Checking : DbManagerState
+    data class Applied(val count: Int, val source: String) : DbManagerState
+    data class Error(val message: String) : DbManagerState
 }
+
+data class ChangeLogEntry(
+    val count: Int,
+    val source: String,
+    val timestamp: Long
+)
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
@@ -74,6 +82,8 @@ class SettingsViewModel @Inject constructor(
         private const val PREF_KEY_PANEL_EDGE = "panel_edge"
         private const val PREF_KEY_BTN_SIZE = "panel_btn_size"
         private const val PREF_KEY_OPACITY = "panel_opacity"
+        private const val PREF_KEY_PRODUCT_DB_VERSION = "product_db_version"
+        private const val PREF_KEY_CHANGE_LOG = "change_log"
     }
 
     private val _isFloatingButtonEnabled = MutableStateFlow(false)
@@ -115,8 +125,11 @@ class SettingsViewModel @Inject constructor(
     private val _updateState = MutableStateFlow<UpdateUiState>(UpdateUiState.Idle)
     val updateState: StateFlow<UpdateUiState> = _updateState.asStateFlow()
 
-    private val _dbUpdateState = MutableStateFlow<DbUpdateState>(DbUpdateState.Idle)
-    val dbUpdateState: StateFlow<DbUpdateState> = _dbUpdateState.asStateFlow()
+    private val _dbManagerState = MutableStateFlow<DbManagerState>(DbManagerState.Idle)
+    val dbManagerState: StateFlow<DbManagerState> = _dbManagerState.asStateFlow()
+
+    private val _changeLog = MutableStateFlow<List<ChangeLogEntry>>(emptyList())
+    val changeLog: StateFlow<List<ChangeLogEntry>> = _changeLog.asStateFlow()
 
     private val _sewCalibration = MutableStateFlow(readSewCalibration())
     val sewCalibration: StateFlow<SewCalibration> = _sewCalibration.asStateFlow()
@@ -134,6 +147,41 @@ class SettingsViewModel @Inject constructor(
 
     private val _scanHistory = MutableStateFlow(ScanHistoryEntry.load(prefs))
     val scanHistory: StateFlow<List<ScanHistoryEntry>> = _scanHistory.asStateFlow()
+
+    private var productDbVersion: Int
+        get() = prefs.getInt(PREF_KEY_PRODUCT_DB_VERSION, 0)
+        set(value) = prefs.edit().putInt(PREF_KEY_PRODUCT_DB_VERSION, value).apply()
+
+    private fun loadChangeLog(): List<ChangeLogEntry> {
+        val json = prefs.getString(PREF_KEY_CHANGE_LOG, null) ?: return emptyList()
+        return try {
+            val arr = org.json.JSONArray(json)
+            (0 until arr.length()).map { i ->
+                val obj = arr.getJSONObject(i)
+                ChangeLogEntry(
+                    count = obj.getInt("count"),
+                    source = obj.getString("source"),
+                    timestamp = obj.getLong("timestamp")
+                )
+            }
+        } catch (e: Exception) { emptyList() }
+    }
+
+    private fun saveChangeLog(entry: ChangeLogEntry) {
+        val entries = loadChangeLog().toMutableList()
+        entries.add(0, entry)
+        val trimmed = entries.take(20)
+        val arr = org.json.JSONArray()
+        trimmed.forEach { e ->
+            arr.put(org.json.JSONObject().apply {
+                put("count", e.count)
+                put("source", e.source)
+                put("timestamp", e.timestamp)
+            })
+        }
+        prefs.edit().putString(PREF_KEY_CHANGE_LOG, arr.toString()).apply()
+        _changeLog.value = trimmed
+    }
 
     val currentVersion: String = BuildConfig.VERSION_NAME
 
@@ -164,6 +212,7 @@ class SettingsViewModel @Inject constructor(
         _awaitingSewCalibration.value = actualAwaiting
         prefs.registerOnSharedPreferenceChangeListener(prefsListener)
         loadInstalledApps()
+        _changeLog.value = loadChangeLog()
     }
 
     private fun loadInstalledApps() {
@@ -492,58 +541,94 @@ class SettingsViewModel @Inject constructor(
         _updateState.value = UpdateUiState.Idle
     }
 
-    fun downloadBarcodeDb() {
-        if (_dbUpdateState.value is DbUpdateState.Downloading) return
+    fun importProductFile(context: Context, uri: android.net.Uri, fileName: String) {
+        if (_dbManagerState.value !is DbManagerState.Idle) return
+        _dbManagerState.value = DbManagerState.Importing
         viewModelScope.launch(Dispatchers.IO) {
-            _dbUpdateState.value = DbUpdateState.Downloading
             try {
-                val url = URL("https://raw.githubusercontent.com/Monutor/scanner-overlay/master/app/src/main/assets/barcode-products.csv")
-                val text = url.readText()
-                val newItems = parseRemoteCsv(text)
+                val report = ProductImporter.import(context, uri, fileName)
+                if (report.count == 0) {
+                    val msg = if (report.errors.isNotEmpty()) report.errors.joinToString("\n") else "Нет новых товаров"
+                    withContext(Dispatchers.Main) { _dbManagerState.value = DbManagerState.Error(msg) }
+                    return@launch
+                }
+                val total = ArticleBarcodeDatabase.getAllItems().size
+                val csv = ArticleBarcodeDatabase.exportToCsv()
+                val ok = GithubDatabaseManager.publishFile("barcode-products.csv", csv, "sync: import + publish")
+                if (!ok) {
+                    withContext(Dispatchers.Main) { _dbManagerState.value = DbManagerState.Error("Импорт выполнен, но не удалось опубликовать на GitHub") }
+                    return@launch
+                }
+                val newVersion = (productDbVersion + 1).coerceAtLeast(1)
+                val versionJson = org.json.JSONObject().apply {
+                    put("versionCode", newVersion)
+                    put("productsHash", csv.length.toString())
+                    put("timestamp", System.currentTimeMillis())
+                }.toString(2)
+                GithubDatabaseManager.publishFile("db_version.json", versionJson, "sync: update db_version.json")
+                productDbVersion = newVersion
+                saveChangeLog(ChangeLogEntry(report.count, "импорт", System.currentTimeMillis()))
                 withContext(Dispatchers.Main) {
-                    if (newItems.isEmpty()) {
-                        _dbUpdateState.value = DbUpdateState.UpToDate
-                    } else {
-                        _dbUpdateState.value = DbUpdateState.Ready(newItems)
-                    }
+                    _dbManagerState.value = DbManagerState.Applied(report.count, "импорт")
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    _dbUpdateState.value = DbUpdateState.Error(e.message ?: "Неизвестная ошибка")
+                    _dbManagerState.value = DbManagerState.Error(e.message ?: "Ошибка импорта")
                 }
             }
         }
     }
 
-    private fun parseRemoteCsv(text: String): List<ProductItem> {
-        val result = mutableListOf<ProductItem>()
-        val localSeen = HashSet<String>()
-        val lines = text.lines()
-        for (i in 1 until lines.size) {
-            val line = lines[i].trim()
-            if (line.isEmpty()) continue
-            val parts = line.split(";")
-            if (parts.size < 14) continue
-            val articleCode = parts[4].trim()
-            val name = parts[5].trim()
-            val barcode = parts[13].trim()
-            if (articleCode.isEmpty() || localSeen.contains(articleCode)) continue
-            if (ArticleBarcodeDatabase.containsArticleCode(articleCode)) continue
-            localSeen.add(articleCode)
-            result.add(ProductItem(articleCode, name, barcode))
+    fun checkForProductUpdates() {
+        if (_dbManagerState.value !is DbManagerState.Idle) return
+        _dbManagerState.value = DbManagerState.Checking
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val remoteVersion = GithubDatabaseManager.getDbVersion()
+                if (remoteVersion == null) {
+                    withContext(Dispatchers.Main) {
+                        _dbManagerState.value = DbManagerState.Error("База ещё не опубликована. Выполните импорт, чтобы инициализировать.")
+                    }
+                    return@launch
+                }
+                if (remoteVersion.versionCode <= productDbVersion) {
+                    withContext(Dispatchers.Main) {
+                        _dbManagerState.value = DbManagerState.Idle
+                    }
+                    return@launch
+                }
+                val csv = GithubDatabaseManager.downloadFile("barcode-products.csv")
+                if (csv == null) {
+                    withContext(Dispatchers.Main) {
+                        _dbManagerState.value = DbManagerState.Error("Не удалось скачать базу товаров")
+                    }
+                    return@launch
+                }
+                val newItems = ArticleBarcodeDatabase.importFromRemote(csv)
+                ArticleBarcodeDatabase.mergeExtra(newItems)
+                ArticleBarcodeDatabase.persistExtra(app)
+                productDbVersion = remoteVersion.versionCode
+                if (newItems.isNotEmpty()) {
+                    saveChangeLog(ChangeLogEntry(newItems.size, "синхронизация", System.currentTimeMillis()))
+                }
+                withContext(Dispatchers.Main) {
+                    if (newItems.isEmpty()) {
+                        _dbManagerState.value = DbManagerState.Idle
+                    } else {
+                        _dbManagerState.value = DbManagerState.Applied(newItems.size, "синхронизация")
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _dbManagerState.value = DbManagerState.Error(e.message ?: "Ошибка проверки")
+                }
+            }
         }
-        return result
     }
 
-    fun applyBarcodeDbUpdate() {
-        val state = _dbUpdateState.value
-        if (state !is DbUpdateState.Ready) return
-        ArticleBarcodeDatabase.mergeExtra(state.newItems)
-        ArticleBarcodeDatabase.persistExtra(app, state.newItems)
-        _dbUpdateState.value = DbUpdateState.Added(state.newItems.size)
-    }
 
-    fun resetBarcodeDbUpdateState() {
-        _dbUpdateState.value = DbUpdateState.Idle
+
+    fun resetDbManagerState() {
+        _dbManagerState.value = DbManagerState.Idle
     }
 }

@@ -2,6 +2,9 @@ package com.scanner.overlay.settings
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.provider.OpenableColumns
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -25,6 +28,11 @@ import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -34,7 +42,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -94,7 +107,8 @@ fun SettingsScreen(
     }
 
     val updateState by viewModel.updateState.collectAsState()
-    val dbUpdateState by viewModel.dbUpdateState.collectAsState()
+    val dbManagerState by viewModel.dbManagerState.collectAsState()
+    val changeLog by viewModel.changeLog.collectAsState()
     val currentVersion = viewModel.currentVersion
     val sewCalibration by viewModel.sewCalibration.collectAsState()
     val sewTestResult by viewModel.sewTestResult.collectAsState()
@@ -103,6 +117,22 @@ fun SettingsScreen(
     val autoFocusEnabled by viewModel.autoFocusEnabled.collectAsState()
     val isTtsEnabled by viewModel.isTtsEnabled.collectAsState()
     val scanHistory by viewModel.scanHistory.collectAsState()
+
+    val productImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            var fileName = "import.csv"
+            val cursor = context.contentResolver.query(uri, null, null, null, null)
+            cursor?.use { c ->
+                if (c.moveToFirst()) {
+                    val nameIdx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (nameIdx >= 0) c.getString(nameIdx)?.let { fileName = it }
+                }
+            }
+            viewModel.importProductFile(context, uri, fileName)
+        }
+    }
 
     val grantedCount = listOf(cameraGranted, overlayGranted, accessibilityGranted).count { it }
 
@@ -144,11 +174,12 @@ fun SettingsScreen(
                     updateAvailable = updateState is UpdateUiState.Available
                 )
 
-                BarcodeDbUpdateCard(
-                    state = dbUpdateState,
-                    onDownload = { viewModel.downloadBarcodeDb() },
-                    onApply = { viewModel.applyBarcodeDbUpdate() },
-                    onDismiss = { viewModel.resetBarcodeDbUpdateState() }
+                ProductDbCard(
+                    state = dbManagerState,
+                    changeLog = changeLog,
+                    onImport = { productImportLauncher.launch(arrayOf("text/csv", "text/comma-separated-values", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")) },
+                    onCheck = { viewModel.checkForProductUpdates() },
+                    onDismiss = { viewModel.resetDbManagerState() }
                 )
 
                 SectionEyebrow("Поверхность")
@@ -1419,135 +1450,7 @@ private fun UpdateCard(
     }
 }
 
-@Composable
-private fun BarcodeDbUpdateCard(
-    state: DbUpdateState,
-    onDownload: () -> Unit,
-    onApply: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
-    ) {
-        Column {
-            CardHeader(
-                title = "База ШК",
-                subtitle = "Товарные штрихкоды"
-            )
-            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                when (val s = state) {
-                    is DbUpdateState.Idle -> {
-                        FilledTonalButton(
-                            onClick = onDownload,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Загрузить базу ШК товаров", style = MaterialTheme.typography.labelLarge)
-                        }
-                    }
-                    is DbUpdateState.Downloading -> {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                            Spacer(Modifier.width(12.dp))
-                            Text("Загрузка...")
-                        }
-                    }
-                    is DbUpdateState.Ready -> {
-                        var showDialog by remember { mutableStateOf(true) }
-                        if (showDialog) {
-                            AlertDialog(
-                                onDismissRequest = { showDialog = false; onDismiss() },
-                                title = { Text("Новые ШК (${s.newItems.size})") },
-                                text = {
-                                    Column(Modifier.verticalScroll(rememberScrollState())) {
-                                        val display = s.newItems.take(40)
-                                        display.forEach { item ->
-                                            Text(
-                                                "${item.articleCode} — ${item.name}",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                modifier = Modifier.padding(vertical = 2.dp)
-                                            )
-                                        }
-                                        if (s.newItems.size > 40) {
-                                            Text(
-                                                "... и ещё ${s.newItems.size - 40}",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    }
-                                },
-                                confirmButton = {
-                                    TextButton(onClick = { showDialog = false; onApply() }) {
-                                        Text("Добавить")
-                                    }
-                                },
-                                dismissButton = {
-                                    TextButton(onClick = { showDialog = false; onDismiss() }) {
-                                        Text("Отмена")
-                                    }
-                                }
-                            )
-                        }
-                    }
-                    is DbUpdateState.Added -> {
-                        LaunchedEffect(Unit) {
-                            kotlinx.coroutines.delay(3000)
-                            onDismiss()
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Check,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.tertiary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text("Добавлено: ${s.count}")
-                        }
-                    }
-                    is DbUpdateState.UpToDate -> {
-                        LaunchedEffect(Unit) {
-                            kotlinx.coroutines.delay(2000)
-                            onDismiss()
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Check,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.tertiary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text("База актуальна")
-                        }
-                    }
-                    is DbUpdateState.Error -> {
-                        Text(
-                            text = s.message,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
+
 
 @Composable
 private fun TtsToggleCard(
@@ -1657,8 +1560,208 @@ private fun HistoryRow(
     }
 }
 
+
+
+
+
+@Composable
+private fun ProductDbCard(
+    state: DbManagerState,
+    changeLog: List<ChangeLogEntry>,
+    onImport: () -> Unit,
+    onCheck: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    LaunchedEffect(state) {
+        if (state is DbManagerState.Applied) {
+            kotlinx.coroutines.delay(4000)
+            onDismiss()
+        }
+    }
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+    ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.QrCode,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "База ШК товаров",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = "Импорт · синхронизация",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                when (val s = state) {
+                    is DbManagerState.Idle -> {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = onImport,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.UploadFile,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text("Импорт", style = MaterialTheme.typography.labelLarge)
+                            }
+                            OutlinedButton(
+                                onClick = onCheck,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CloudDownload,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text("Проверить", style = MaterialTheme.typography.labelLarge)
+                            }
+                        }
+                        if (changeLog.isNotEmpty()) {
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                text = "Последние изменения",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            changeLog.take(3).forEach { entry ->
+                                val dateStr = java.text.SimpleDateFormat("dd.MM.yy", java.util.Locale.getDefault())
+                                    .format(java.util.Date(entry.timestamp))
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = dateStr,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = "+${entry.count} товаров (${entry.source})",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    is DbManagerState.Importing -> {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(12.dp))
+                            Text("Импорт...")
+                        }
+                    }
+                    is DbManagerState.Checking -> {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(12.dp))
+                            Text("Проверка обновлений...")
+                        }
+                    }
+                    is DbManagerState.Applied -> {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.tertiary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("+${s.count} товаров (${s.source})")
+                        }
+                    }
+                    is DbManagerState.Error -> {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = s.message,
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = onDismiss,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Закрыть", style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun AboutFooter(version: String) {
+    val uriHandler = LocalUriHandler.current
+    val donateUrl = "https://boosty.to/monutorfullhd/donate"
+    val linkColor = MaterialTheme.colorScheme.primary
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1672,9 +1775,18 @@ private fun AboutFooter(version: String) {
             fontWeight = FontWeight.Medium
         )
         Text(
-            text = "github.com/Monutor/scanner-overlay",
+            text = buildAnnotatedString {
+                withStyle(
+                    SpanStyle(
+                        color = linkColor,
+                        textDecoration = TextDecoration.Underline
+                    )
+                ) {
+                    append("Поддержать проект на Boosty")
+                }
+            },
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            modifier = Modifier.clickable { uriHandler.openUri(donateUrl) }
         )
     }
 }
