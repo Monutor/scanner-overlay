@@ -1,17 +1,12 @@
 package com.scanner.overlay.scanner
 
 import android.content.Context
-import java.io.BufferedReader
-import java.io.BufferedWriter
-import java.io.File
-import java.io.FileInputStream
-import java.io.FileOutputStream
-import java.io.InputStreamReader
-import java.io.OutputStreamWriter
+import org.json.JSONArray
+import org.json.JSONObject
 
 object ArticleBarcodeDatabase {
 
-    private const val EXTRA_FILE = "barcode_extra.csv"
+    private const val LOCAL_DB_FILE = "barcode-products-db.json"
 
     private val items = mutableListOf<ProductItem>()
     private val seenArticleCodes = HashSet<String>()
@@ -21,88 +16,64 @@ object ArticleBarcodeDatabase {
         if (loaded) return
         synchronized(this) {
             if (loaded) return
-            loadFromAssets(context)
-            loadFromExtra(context)
+            loadFromCache(context)
+            if (!loaded) {
+                loadFromAssets(context)
+            }
             loaded = true
         }
     }
 
+    fun saveToCache(context: Context) {
+        try {
+            context.filesDir.resolve(LOCAL_DB_FILE).writeText(toJsonString())
+        } catch (_: Exception) {}
+    }
+
+    private fun loadFromCache(context: Context) {
+        try {
+            val file = context.filesDir.resolve(LOCAL_DB_FILE)
+            if (file.exists()) {
+                parseJson(file.readText())
+            }
+        } catch (_: Exception) {}
+    }
+
     private fun loadFromAssets(context: Context) {
         try {
-            val stream = context.assets.open("barcode-products.csv")
-            val reader = BufferedReader(InputStreamReader(stream))
-            reader.readLine()
-            var line: String?
-            while (reader.readLine().also { line = it } != null) {
-                addFromCsvLine(line!!)
-            }
-            reader.close()
+            val jsonText = context.assets.open("barcode-products.json").bufferedReader().readText()
+            parseJson(jsonText)
+            loaded = true
         } catch (_: Exception) {}
     }
 
-    private fun loadFromExtra(context: Context) {
+    private fun parseJson(jsonText: String) {
+        items.clear()
+        seenArticleCodes.clear()
         try {
-            val file = File(context.filesDir, EXTRA_FILE)
-            if (!file.exists()) return
-            val reader = BufferedReader(InputStreamReader(FileInputStream(file)))
-            var line: String?
-            while (reader.readLine().also { line = it } != null) {
-                addFromCsvLine(line!!)
+            val array = JSONArray(jsonText)
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                val articleCode = optString(obj, "articleCode")
+                if (articleCode.isEmpty()) continue
+                seenArticleCodes.add(articleCode)
+                items.add(ProductItem(
+                    articleCode = articleCode,
+                    name = optString(obj, "name"),
+                    barcode = optString(obj, "barcode")
+                ))
             }
-            reader.close()
+            loaded = true
         } catch (_: Exception) {}
     }
 
-    private fun addFromCsvLine(line: String) {
-        val parts = line.split(";")
-        var articleCode: String
-        var name: String
-        var barcode: String
-        if (parts.size >= 14) {
-            articleCode = parts[4].trim()
-            name = parts[5].trim()
-            barcode = parts[13].trim()
-        } else if (parts.size >= 3) {
-            articleCode = parts[0].trim()
-            name = parts[1].trim()
-            barcode = parts[2].trim()
-        } else {
-            return
-        }
-        if (articleCode.isEmpty() || seenArticleCodes.contains(articleCode)) return
-        seenArticleCodes.add(articleCode)
-        items.add(ProductItem(articleCode, name, barcode))
-    }
-
-    fun mergeExtra(newItems: List<ProductItem>) {
-        items.addAll(newItems)
+    fun addItems(newItems: List<ProductItem>) {
         for (item in newItems) {
-            seenArticleCodes.add(item.articleCode)
+            if (!seenArticleCodes.contains(item.articleCode)) {
+                seenArticleCodes.add(item.articleCode)
+                items.add(item)
+            }
         }
-    }
-
-    fun persistExtra(context: Context, newItems: List<ProductItem>) {
-        try {
-            val file = File(context.filesDir, EXTRA_FILE)
-            val writer = BufferedWriter(OutputStreamWriter(FileOutputStream(file, true)))
-            for (item in newItems) {
-                writer.write(";;;;${item.articleCode};${item.name};;;;;;;;${item.barcode};;;;;;;")
-                writer.newLine()
-            }
-            writer.close()
-        } catch (_: Exception) {}
-    }
-
-    fun persistExtra(context: Context) {
-        try {
-            val file = File(context.filesDir, EXTRA_FILE)
-            val writer = BufferedWriter(OutputStreamWriter(FileOutputStream(file, false)))
-            for (item in items) {
-                writer.write(";;;;${item.articleCode};${item.name};;;;;;;;${item.barcode};;;;;;;")
-                writer.newLine()
-            }
-            writer.close()
-        } catch (_: Exception) {}
     }
 
     fun containsArticleCode(code: String): Boolean {
@@ -118,51 +89,32 @@ object ArticleBarcodeDatabase {
         return items.toList()
     }
 
-    fun exportToCsv(): String {
-        val sb = StringBuilder()
-        sb.appendLine("articleCode;name;barcode")
-        for (item in items) {
-            sb.appendLine("${item.articleCode};${item.name};${item.barcode}")
+    fun toJsonString(): String {
+        val itemsList = items.map {
+            JSONObject().apply {
+                put("articleCode", it.articleCode)
+                put("name", it.name)
+                put("barcode", it.barcode)
+            }.toString()
         }
-        return sb.toString()
+        return "[${itemsList.joinToString(",")}]"
     }
 
-    fun importFromRemote(csvText: String): List<ProductItem> {
-        val newItems = mutableListOf<ProductItem>()
-        try {
-            val lines = csvText.lines()
-            var startIndex = 0
-            if (lines.isNotEmpty() && lines[0].startsWith("articleCode")) {
-                startIndex = 1
-            }
-            for (i in startIndex until lines.size) {
-                val line = lines[i].trim()
-                if (line.isEmpty()) continue
-                val parts = line.split(";")
-                var articleCode: String
-                var name: String
-                var barcode: String
-                if (parts.size >= 14) {
-                    articleCode = parts[4].trim()
-                    name = parts[5].trim()
-                    barcode = parts[13].trim()
-                } else if (parts.size >= 3) {
-                    articleCode = parts[0].trim()
-                    name = parts[1].trim()
-                    barcode = parts[2].trim()
-                } else {
-                    continue
-                }
-                if (articleCode.isEmpty() || seenArticleCodes.contains(articleCode)) continue
-                newItems.add(ProductItem(articleCode, name, barcode))
-            }
-        } catch (_: Exception) {}
-        return newItems
+    fun loadFromJson(jsonText: String) {
+        parseJson(jsonText)
     }
 
-    fun mergeRemoteProducts(context: Context, newItems: List<ProductItem>) {
-        if (newItems.isEmpty()) return
-        mergeExtra(newItems)
-        persistExtra(context, newItems)
+    fun reset() {
+        items.clear()
+        seenArticleCodes.clear()
+        loaded = false
+    }
+
+    private fun optString(obj: JSONObject, key: String): String {
+        return try {
+            obj.getString(key).trim()
+        } catch (_: Exception) {
+            ""
+        }
     }
 }

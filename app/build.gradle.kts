@@ -16,12 +16,15 @@ android {
         applicationId = "com.scanner.overlay"
         minSdk = 26
         targetSdk = 36
-        versionCode = 23
-        versionName = "1.13.0"
-        val token = rootProject.file("local.properties").takeIf { it.exists() }?.let {
-            val p = Properties().also { it.load(it.inputStream()) }
-            p.getProperty("github.token", "")
-        } ?: ""
+        versionCode = 24
+        versionName = "1.14.0"
+        var token = ""
+        val propsFile = rootProject.file("local.properties")
+        if (propsFile.exists()) {
+            val p = Properties()
+            propsFile.reader().use { p.load(it) }
+            token = p.getProperty("github.token", "")
+        }
         buildConfigField("String", "GITHUB_TOKEN", "\"$token\"")
     }
 

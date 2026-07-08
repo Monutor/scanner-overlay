@@ -49,7 +49,7 @@ sealed interface DbManagerState {
     data object Idle : DbManagerState
     data object Importing : DbManagerState
     data object Checking : DbManagerState
-    data class Applied(val count: Int, val source: String) : DbManagerState
+    data class Applied(val count: Int, val source: String, val products: List<ProductItem> = emptyList()) : DbManagerState
     data class Error(val message: String) : DbManagerState
 }
 
@@ -130,6 +130,9 @@ class SettingsViewModel @Inject constructor(
 
     private val _changeLog = MutableStateFlow<List<ChangeLogEntry>>(emptyList())
     val changeLog: StateFlow<List<ChangeLogEntry>> = _changeLog.asStateFlow()
+
+    private val _viewProducts = MutableStateFlow<List<ProductItem>?>(null)
+    val viewProducts: StateFlow<List<ProductItem>?> = _viewProducts.asStateFlow()
 
     private val _sewCalibration = MutableStateFlow(readSewCalibration())
     val sewCalibration: StateFlow<SewCalibration> = _sewCalibration.asStateFlow()
@@ -552,24 +555,10 @@ class SettingsViewModel @Inject constructor(
                     withContext(Dispatchers.Main) { _dbManagerState.value = DbManagerState.Error(msg) }
                     return@launch
                 }
-                val total = ArticleBarcodeDatabase.getAllItems().size
-                val csv = ArticleBarcodeDatabase.exportToCsv()
-                val ok = GithubDatabaseManager.publishFile("barcode-products.csv", csv, "sync: import + publish")
-                if (!ok) {
-                    withContext(Dispatchers.Main) { _dbManagerState.value = DbManagerState.Error("Импорт выполнен, но не удалось опубликовать на GitHub") }
-                    return@launch
-                }
-                val newVersion = (productDbVersion + 1).coerceAtLeast(1)
-                val versionJson = org.json.JSONObject().apply {
-                    put("versionCode", newVersion)
-                    put("productsHash", csv.length.toString())
-                    put("timestamp", System.currentTimeMillis())
-                }.toString(2)
-                GithubDatabaseManager.publishFile("db_version.json", versionJson, "sync: update db_version.json")
-                productDbVersion = newVersion
+                productDbVersion = (productDbVersion + 1).coerceAtLeast(1)
                 saveChangeLog(ChangeLogEntry(report.count, "импорт", System.currentTimeMillis()))
                 withContext(Dispatchers.Main) {
-                    _dbManagerState.value = DbManagerState.Applied(report.count, "импорт")
+                    _dbManagerState.value = DbManagerState.Applied(report.count, "импорт", report.samples)
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
@@ -591,32 +580,24 @@ class SettingsViewModel @Inject constructor(
                     }
                     return@launch
                 }
-                if (remoteVersion.versionCode <= productDbVersion) {
-                    withContext(Dispatchers.Main) {
-                        _dbManagerState.value = DbManagerState.Idle
-                    }
-                    return@launch
-                }
-                val csv = GithubDatabaseManager.downloadFile("barcode-products.csv")
-                if (csv == null) {
+                
+                val json = GithubDatabaseManager.downloadFile("barcode-products.json")
+                if (json == null) {
                     withContext(Dispatchers.Main) {
                         _dbManagerState.value = DbManagerState.Error("Не удалось скачать базу товаров")
                     }
                     return@launch
                 }
-                val newItems = ArticleBarcodeDatabase.importFromRemote(csv)
-                ArticleBarcodeDatabase.mergeExtra(newItems)
-                ArticleBarcodeDatabase.persistExtra(app)
+                
+                val existingCodes = ArticleBarcodeDatabase.getAllItems().map { it.articleCode }.toSet()
+                ArticleBarcodeDatabase.reset()
+                ArticleBarcodeDatabase.loadFromJson(json)
+                ArticleBarcodeDatabase.saveToCache(app)
                 productDbVersion = remoteVersion.versionCode
-                if (newItems.isNotEmpty()) {
-                    saveChangeLog(ChangeLogEntry(newItems.size, "синхронизация", System.currentTimeMillis()))
-                }
+                val newItems = ArticleBarcodeDatabase.getAllItems().filter { it.articleCode !in existingCodes }
+                
                 withContext(Dispatchers.Main) {
-                    if (newItems.isEmpty()) {
-                        _dbManagerState.value = DbManagerState.Idle
-                    } else {
-                        _dbManagerState.value = DbManagerState.Applied(newItems.size, "синхронизация")
-                    }
+                    _dbManagerState.value = DbManagerState.Applied(newItems.size, "синхронизация", newItems.take(50))
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
@@ -626,9 +607,40 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-
+    fun clearChangeLog() {
+        prefs.edit().remove(PREF_KEY_CHANGE_LOG).apply()
+        _changeLog.value = emptyList()
+    }
 
     fun resetDbManagerState() {
         _dbManagerState.value = DbManagerState.Idle
     }
+
+    fun refreshViewProducts() {
+        _viewProducts.value = null
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val json = GithubDatabaseManager.downloadFile("barcode-products.json")
+                if (json != null && json != "[]") {
+                    ArticleBarcodeDatabase.reset()
+                    ArticleBarcodeDatabase.loadFromJson(json)
+                    ArticleBarcodeDatabase.saveToCache(app)
+                    withContext(Dispatchers.Main) {
+                        _viewProducts.value = ArticleBarcodeDatabase.getAllItems()
+                    }
+                } else {
+                    val local = ArticleBarcodeDatabase.getAllItems()
+                    withContext(Dispatchers.Main) {
+                        _viewProducts.value = if (local.isNotEmpty()) local else emptyList()
+                    }
+                }
+            } catch (_: Exception) {
+                val local = ArticleBarcodeDatabase.getAllItems()
+                withContext(Dispatchers.Main) {
+                    _viewProducts.value = if (local.isNotEmpty()) local else emptyList()
+                }
+            }
+        }
+    }
+
 }

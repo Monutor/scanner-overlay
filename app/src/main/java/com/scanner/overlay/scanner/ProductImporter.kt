@@ -12,7 +12,8 @@ import java.util.zip.ZipFile
 
 data class ProductImportReport(
     val count: Int,
-    val errors: List<String> = emptyList()
+    val errors: List<String> = emptyList(),
+    val samples: List<ProductItem> = emptyList()
 )
 
 object ProductImporter {
@@ -40,39 +41,68 @@ object ProductImporter {
                 }
             }
 
-            val existingCount = items.count { ArticleBarcodeDatabase.containsArticleCode(it.articleCode) }
-            val newItems = items.filter { !ArticleBarcodeDatabase.containsArticleCode(it.articleCode) }
+            ArticleBarcodeDatabase.init(context as android.content.Context)
 
+            if (items.isEmpty()) {
+                return ProductImportReport(0, errors = listOf("Не удалось распознать товары в файле. Проверьте формат: артикул;наименование;штрихкод"))
+            }
+
+            val uniqueItems = items.distinctBy { it.articleCode }
+            val newItems = uniqueItems.filter { !ArticleBarcodeDatabase.containsArticleCode(it.articleCode) }
+            val existingCount = uniqueItems.size - newItems.size
+            
             if (newItems.isEmpty()) {
                 return ProductImportReport(0, errors = listOf("Все артикулы уже есть в базе"))
             }
 
-            ArticleBarcodeDatabase.mergeExtra(newItems)
-            ArticleBarcodeDatabase.persistExtra(context, newItems)
+            ArticleBarcodeDatabase.addItems(newItems)
+            ArticleBarcodeDatabase.saveToCache(context as android.content.Context)
+
+            val csvJson = ArticleBarcodeDatabase.toJsonString()
+            val ok = kotlinx.coroutines.runBlocking { com.scanner.overlay.sync.GithubDatabaseManager.publishFile("barcode-products.json", csvJson, "sync: import + publish") }
+            
+            if (!ok) {
+                return ProductImportReport(
+                    count = newItems.size,
+                    errors = listOf("Импорт выполнен, но не удалось опубликовать на GitHub"),
+                    samples = newItems.take(50)
+                )
+            }
+
+            val versionJson = org.json.JSONObject().apply {
+                put("versionCode", (getProductDbVersion(context as android.content.Context) + 1).coerceAtLeast(1))
+                put("productsHash", csvJson.length.toString())
+                put("timestamp", System.currentTimeMillis())
+            }.toString(2)
+            kotlinx.coroutines.runBlocking { com.scanner.overlay.sync.GithubDatabaseManager.publishFile("db_version.json", versionJson, "sync: update db_version.json") }
 
             ProductImportReport(
                 count = newItems.size,
-                errors = if (existingCount > 0) listOf("$existingCount пропущено (уже есть)") else emptyList()
+                errors = if (existingCount > 0) listOf("$existingCount пропущено (уже есть)") else emptyList(),
+                samples = newItems.take(50)
             )
         }
     }
 
     private fun parseCsv(inputStream: InputStream): List<ProductItem> {
-        val text = inputStream.bufferedReader(Charsets.UTF_8).readText()
+        val text = inputStream.bufferedReader(Charsets.UTF_8).readText().removePrefix("\uFEFF")
         val lines = text.lines().filter { it.isNotBlank() }
-        if (lines.isEmpty()) return emptyList()
+        if (lines.isEmpty()) {
+            Log.e(TAG, "parseCsv: no non-blank lines in ${text.length} chars")
+            return emptyList()
+        }
 
         val separator = detectSeparator(lines)
         val header = lines[0].trim().lowercase()
         val headerParts = header.split(separator).map { it.trim() }
 
-        val hasHeader = headerParts.any { it in listOf("articlecode", "barcode", "name", "article", "sku") }
+        val hasHeader = headerParts.any { it in listOf("articlecode", "barcode", "name", "article", "sku", "артикул", "наименование", "штрихкод", "код товара", "шк товара") }
 
         val colMap = if (hasHeader) {
             mapOf(
-                "articleCode" to (headerParts.indexOfFirst { it in listOf("articlecode", "article", "sku", "code") }.takeIf { it >= 0 }),
-                "name" to (headerParts.indexOfFirst { it in listOf("name", "product", "title", "товар") }.takeIf { it >= 0 }),
-                "barcode" to (headerParts.indexOfFirst { it in listOf("barcode", "ean", "upc", "штрихкод", "шк") }.takeIf { it >= 0 })
+                "articleCode" to (headerParts.indexOfFirst { it in listOf("articlecode", "article", "sku", "code", "артикул", "код", "код товара") }.takeIf { it >= 0 }),
+                "name" to (headerParts.indexOfFirst { it in listOf("name", "product", "title", "товар", "наименование", "товар") }.takeIf { it >= 0 }),
+                "barcode" to (headerParts.indexOfFirst { it in listOf("barcode", "ean", "upc", "штрихкод", "шк", "баркод", "шк товара") }.takeIf { it >= 0 })
             )
         } else null
 
@@ -124,13 +154,13 @@ object ProductImporter {
 
         val headerCells = rows[0]
         val headerKeys = headerCells.map { it.lowercase().trim() }
-        val hasHeader = headerKeys.any { it in listOf("articlecode", "barcode", "name", "article", "sku") }
+        val hasHeader = headerKeys.any { it in listOf("articlecode", "barcode", "name", "article", "sku", "артикул", "наименование", "штрихкод", "код товара", "шк товара") }
 
         val colMap = if (hasHeader) {
             mapOf(
-                "articleCode" to (headerKeys.indexOfFirst { it in listOf("articlecode", "article", "sku", "code") }.takeIf { it >= 0 }),
-                "name" to (headerKeys.indexOfFirst { it in listOf("name", "product", "title", "товар") }.takeIf { it >= 0 }),
-                "barcode" to (headerKeys.indexOfFirst { it in listOf("barcode", "ean", "upc", "штрихкод", "шк") }.takeIf { it >= 0 })
+                "articleCode" to (headerKeys.indexOfFirst { it in listOf("articlecode", "article", "sku", "code", "артикул", "код", "код товара") }.takeIf { it >= 0 }),
+                "name" to (headerKeys.indexOfFirst { it in listOf("name", "product", "title", "товар", "наименование", "товар") }.takeIf { it >= 0 }),
+                "barcode" to (headerKeys.indexOfFirst { it in listOf("barcode", "ean", "upc", "штрихкод", "шк", "баркод", "шк товара") }.takeIf { it >= 0 })
             )
         } else null
 
@@ -195,6 +225,15 @@ object ProductImporter {
         return strings
     }
 
+    private fun cellRefToIndex(cellRef: String): Int {
+        val letters = cellRef.takeWhile { it.isLetter() }.uppercase()
+        var index = 0
+        for (ch in letters) {
+            index = index * 26 + (ch - 'A' + 1)
+        }
+        return index - 1
+    }
+
     private fun parseSheet(data: ByteArray, sharedStrings: List<String>): List<List<String>> {
         val rows = mutableListOf<List<String>>()
         try {
@@ -207,6 +246,7 @@ object ProductImporter {
             var inCell = false
             var cellType = ""
             var inlineText = false
+            var cellCol = -1
 
             var eventType = parser.eventType
             while (eventType != XmlPullParser.END_DOCUMENT) {
@@ -219,6 +259,8 @@ object ProductImporter {
                             }
                             "c" -> {
                                 cellType = parser.getAttributeValue(null, "t") ?: ""
+                                val ref = parser.getAttributeValue(null, "r")
+                                cellCol = if (ref != null) cellRefToIndex(ref) else -1
                                 inlineText = false
                                 inCell = true
                             }
@@ -228,18 +270,22 @@ object ProductImporter {
                     XmlPullParser.TEXT -> {
                         if (inCell && inRow) {
                             val text = parser.text.trim()
-                            when {
-                                inlineText -> currentRow.add(text)
-                                cellType == "s" -> {
-                                    val idx = text.toIntOrNull()
-                                    if (idx != null && idx < sharedStrings.size) {
-                                        currentRow.add(sharedStrings[idx])
-                                    } else {
-                                        currentRow.add(text)
+                            if (text.isNotEmpty()) {
+                                val value = when {
+                                    inlineText -> text
+                                    cellType == "s" -> {
+                                        val idx = text.toIntOrNull()
+                                        if (idx != null && idx < sharedStrings.size) sharedStrings[idx] else text
                                     }
+                                    else -> text
                                 }
-                                cellType == "" || cellType == "str" -> {
-                                    currentRow.add(text)
+                                if (cellCol >= 0) {
+                                    while (currentRow.size <= cellCol) {
+                                        currentRow.add("")
+                                    }
+                                    currentRow[cellCol] = value
+                                } else {
+                                    currentRow.add(value)
                                 }
                             }
                         }
@@ -267,5 +313,12 @@ object ProductImporter {
         val semicolonCount = lines.sumOf { line -> line.count { it == ';' } }
         val commaCount = lines.sumOf { line -> line.count { it == ',' } }
         return if (semicolonCount > commaCount) ';' else ','
+    }
+
+    private fun getProductDbVersion(context: android.content.Context): Int {
+        return try {
+            val prefs = context.getSharedPreferences("scanner_prefs", 0)
+            prefs.getInt("product_db_version", 0)
+        } catch (_: Exception) { 0 }
     }
 }

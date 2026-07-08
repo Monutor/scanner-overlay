@@ -14,6 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -26,6 +27,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.QrCode
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.UploadFile
@@ -134,6 +136,9 @@ fun SettingsScreen(
         }
     }
 
+    var showViewDatabaseDialog by remember { mutableStateOf(false) }
+    val viewProducts by viewModel.viewProducts.collectAsState()
+
     val grantedCount = listOf(cameraGranted, overlayGranted, accessibilityGranted).count { it }
 
     Scaffold(
@@ -179,6 +184,11 @@ fun SettingsScreen(
                     changeLog = changeLog,
                     onImport = { productImportLauncher.launch(arrayOf("text/csv", "text/comma-separated-values", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")) },
                     onCheck = { viewModel.checkForProductUpdates() },
+                    onViewProducts = {
+                        viewModel.refreshViewProducts()
+                        showViewDatabaseDialog = true
+                    },
+                    onClearLog = { viewModel.clearChangeLog() },
                     onDismiss = { viewModel.resetDbManagerState() }
                 )
 
@@ -259,6 +269,15 @@ fun SettingsScreen(
                 )
 
                 Spacer(Modifier.height(8.dp))
+                
+                if (showViewDatabaseDialog) {
+                    val products = viewProducts
+                    ProductViewDialog(
+                        products = products,
+                        onDismiss = { showViewDatabaseDialog = false }
+                    )
+                }
+                
                 AboutFooter(version = currentVersion)
             }
         }
@@ -1570,13 +1589,90 @@ private fun ProductDbCard(
     changeLog: List<ChangeLogEntry>,
     onImport: () -> Unit,
     onCheck: () -> Unit,
+    onViewProducts: () -> Unit,
+    onClearLog: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    var showProductsDialog by remember { mutableStateOf<DbManagerState.Applied?>(null) }
+
     LaunchedEffect(state) {
         if (state is DbManagerState.Applied) {
-            kotlinx.coroutines.delay(4000)
-            onDismiss()
+            showProductsDialog = state
         }
+    }
+
+    showProductsDialog?.let { applied ->
+        AlertDialog(
+            onDismissRequest = { showProductsDialog = null; onDismiss() },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.tertiary
+                )
+            },
+            title = {
+                Text("+${applied.count} товаров (${applied.source})")
+            },
+            text = {
+                if (applied.products.isNotEmpty()) {
+                    Column {
+                        Text(
+                            text = "Добавлено:",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 400.dp)
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            applied.products.forEach { product ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 3.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = product.name.ifBlank { product.articleCode },
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = buildString {
+                                                append("Арт: ${product.articleCode}")
+                                                if (product.barcode.isNotBlank()) {
+                                                    append("  |  ШК: ${product.barcode}")
+                                                }
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        if (applied.count > applied.products.size) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = "и ещё ${applied.count - applied.products.size} товаров",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showProductsDialog = null; onDismiss() }) {
+                    Text("Закрыть")
+                }
+            }
+        )
     }
 
     Card(
@@ -1623,47 +1719,89 @@ private fun ProductDbCard(
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                 when (val s = state) {
                     is DbManagerState.Idle -> {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Button(
-                                onClick = onImport,
-                                modifier = Modifier.weight(1f)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.UploadFile,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Text("Импорт", style = MaterialTheme.typography.labelLarge)
+                                Button(
+                                    onClick = onImport,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.UploadFile,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Импорт", style = MaterialTheme.typography.labelLarge)
+                                }
+                                OutlinedButton(
+                                    onClick = onCheck,
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(horizontal = 4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CloudDownload,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Проверить", style = MaterialTheme.typography.labelLarge)
+                                }
                             }
                             OutlinedButton(
-                                onClick = onCheck,
-                                modifier = Modifier.weight(1f)
+                                onClick = onViewProducts,
+                                modifier = Modifier.fillMaxWidth(),
+                                contentPadding = PaddingValues(horizontal = 4.dp)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.CloudDownload,
+                                    imageVector = Icons.Default.QrCode,
                                     contentDescription = null,
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(Modifier.width(6.dp))
-                                Text("Проверить", style = MaterialTheme.typography.labelLarge)
+                                Text("Просмотр", style = MaterialTheme.typography.labelLarge)
                             }
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = "База периодически пополняется. Нажимайте «Проверить», чтобы загрузить новые товары.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                         if (changeLog.isNotEmpty()) {
                             Spacer(Modifier.height(12.dp))
-                            Text(
-                                text = "Последние изменения",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.SemiBold
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Последние изменения",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(
+                                    onClick = onClearLog,
+                                    modifier = Modifier.size(20.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Очистить",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
                             Spacer(Modifier.height(4.dp))
                             changeLog.take(3).forEach { entry ->
-                                val dateStr = java.text.SimpleDateFormat("dd.MM.yy", java.util.Locale.getDefault())
-                                    .format(java.util.Date(entry.timestamp))
+                                val dateStr = java.text.SimpleDateFormat("dd.MM.yy HH:mm", java.util.Locale.getDefault()).apply {
+                                    timeZone = java.util.TimeZone.getTimeZone("Europe/Moscow")
+                                }.format(java.util.Date(entry.timestamp))
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -1709,7 +1847,9 @@ private fun ProductDbCard(
                     }
                     is DbManagerState.Applied -> {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showProductsDialog = s },
                             horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -1754,6 +1894,138 @@ private fun ProductDbCard(
             }
         }
     }
+}
+
+@Composable
+private fun ProductViewDialog(
+    products: List<ProductItem>?,
+    onDismiss: () -> Unit,
+) {
+    var searchQuery by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = Icons.Default.QrCode,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary
+            )
+        },
+        title = {
+            Text(if (products != null) "База товаров (${products.size} шт.)" else "Загрузка...")
+        },
+        text = {
+            when {
+                products == null -> {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(32.dp))
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            text = "Загрузка базы с GitHub...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                products.isEmpty() -> {
+                    Text(
+                        text = "База пуста. Выполните импорт или синхронизацию.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 16.dp)
+                    )
+                }
+                else -> {
+                    val sortedProducts = remember(products) {
+                        products.sortedBy { it.articleCode }
+                    }
+                    val filteredProducts = remember(sortedProducts, searchQuery) {
+                        if (searchQuery.isBlank()) sortedProducts
+                        else {
+                            val q = searchQuery.lowercase()
+                            sortedProducts.filter {
+                                it.articleCode.contains(q, ignoreCase = true) ||
+                                it.name.contains(q, ignoreCase = true) ||
+                                it.barcode.contains(q, ignoreCase = true)
+                            }
+                        }
+                    }
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                            placeholder = { Text("Поиск по артикулу, названию или ШК") },
+                            singleLine = true,
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                            textStyle = MaterialTheme.typography.bodyMedium
+                        )
+
+                        Text(
+                            text = "Найдено: ${filteredProducts.size} из ${products.size}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+
+                        LazyColumn(
+                            modifier = Modifier.heightIn(max = 400.dp),
+                            verticalArrangement = Arrangement.spacedBy(1.dp)
+                        ) {
+                            items(filteredProducts.size) { index ->
+                                val product = filteredProducts[index]
+                                val bgColor = if (index % 2 == 0)
+                                    MaterialTheme.colorScheme.surfaceContainerHigh
+                                else
+                                    MaterialTheme.colorScheme.surfaceContainerLow
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 2.dp, horizontal = 8.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(bgColor)
+                                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                                ) {
+                                    Row(modifier = Modifier.fillMaxWidth()) {
+                                        Text(
+                                            text = product.articleCode,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                            color = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        if (product.barcode.isNotBlank()) {
+                                            Text(
+                                                text = "ШК: ${product.barcode}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                    if (product.name.isNotBlank()) {
+                                        Text(
+                                            text = product.name,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            modifier = Modifier.padding(top = 4.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Закрыть")
+            }
+        }
+    )
 }
 
 @Composable
