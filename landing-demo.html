@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SEW-Помощник — Универсальный помощник для SEW</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0 }
+
+html { scroll-behavior: smooth }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  background: #08080e;
+  color: #e0e0e0;
+  line-height: 1.6;
+  overflow-x: hidden;
+}
+
+/* ---------- particles bg ---------- */
+#particles {
+  position: fixed; inset: 0; z-index: 0;
+  pointer-events: none;
+}
+#particles span {
+  position: absolute;
+  width: 3px; height: 3px;
+  background: rgba(0, 230, 118, .25);
+  border-radius: 50%;
+  animation: float linear infinite;
+}
+@keyframes float {
+  0% { transform: translateY(100vh) scale(0); opacity: 0 }
+  10% { opacity: 1 }
+  90% { opacity: 1 }
+  100% { transform: translateY(-10vh) scale(1); opacity: 0 }
+}
+
+/* ---------- nav ---------- */
+nav {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  padding: 16px 40px;
+  display: flex; align-items: center; justify-content: space-between;
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  background: rgba(8,8,14,.75);
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+nav .logo {
+  font-size: 20px; font-weight: 700;
+  background: linear-gradient(135deg, #00e676, #00bcd4);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+nav .logo small { font-size: 12px; opacity: .5; -webkit-text-fill-color: rgba(255,255,255,.5) }
+nav a {
+  color: #999; text-decoration: none; margin-left: 28px; font-size: 14px;
+  transition: color .2s;
+}
+nav a:hover { color: #00e676 }
+
+/* ---------- sections ---------- */
+section { position: relative; z-index: 1 }
+
+.container {
+  max-width: 1100px; margin: 0 auto; padding: 0 24px;
+}
+
+/* ---------- hero ---------- */
+.hero {
+  min-height: 100vh;
+  display: flex; align-items: center; position: relative;
+  overflow: hidden;
+}
+.hero::before {
+  content: '';
+  position: absolute; top: -30%; left: -20%; width: 70%; height: 80%;
+  background: radial-gradient(ellipse, rgba(0,230,118,.08), transparent 70%);
+  pointer-events: none;
+}
+.hero::after {
+  content: '';
+  position: absolute; bottom: -20%; right: -10%; width: 50%; height: 60%;
+  background: radial-gradient(ellipse, rgba(0,188,212,.06), transparent 70%);
+  pointer-events: none;
+}
+
+.hero .container { display: flex; align-items: center; gap: 60px; padding-top: 80px }
+
+.hero-content { flex: 1 }
+.hero-badge {
+  display: inline-block;
+  padding: 6px 16px; border-radius: 100px;
+  background: rgba(0,230,118,.1); border: 1px solid rgba(0,230,118,.2);
+  font-size: 13px; color: #00e676; margin-bottom: 20px;
+}
+.hero h1 {
+  font-size: clamp(36px, 5vw, 60px); font-weight: 800;
+  line-height: 1.1; margin-bottom: 20px;
+}
+.hero h1 span {
+  background: linear-gradient(135deg, #00e676, #00bcd4);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.hero p {
+  font-size: 18px; color: #888; max-width: 520px; margin-bottom: 32px;
+}
+.hero-buttons { display: flex; gap: 14px; flex-wrap: wrap }
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 14px 32px; border-radius: 12px;
+  font-size: 16px; font-weight: 600; text-decoration: none;
+  transition: transform .2s, box-shadow .2s;
+}
+.btn:hover { transform: translateY(-2px) }
+.btn-primary {
+  background: linear-gradient(135deg, #00e676, #00c853);
+  color: #08080e; box-shadow: 0 4px 24px rgba(0,230,118,.3);
+}
+.btn-primary:hover { box-shadow: 0 8px 32px rgba(0,230,118,.45) }
+.btn-secondary {
+  border: 1px solid rgba(255,255,255,.12); color: #ccc;
+  background: rgba(255,255,255,.04);
+}
+.btn-secondary:hover { border-color: rgba(255,255,255,.25); background: rgba(255,255,255,.07) }
+
+.hero-visual { flex: 1; display: flex; justify-content: center; position: relative }
+
+.phone-frame {
+  width: 260px; height: 530px;
+  border-radius: 32px; border: 3px solid rgba(255,255,255,.1);
+  overflow: hidden; position: relative;
+  background: #111;
+  box-shadow: 0 20px 80px rgba(0,0,0,.6), 0 0 40px rgba(0,230,118,.05);
+}
+.phone-frame .screen {
+  width: 100%; height: 100%;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 30px 20px;
+  background: radial-gradient(ellipse at 50% 30%, rgba(0,230,118,.04), transparent 70%);
+}
+.phone-frame .status-bar {
+  position: absolute; top: 0; left: 0; right: 0;
+  padding: 10px 20px 6px;
+  display: flex; justify-content: space-between;
+  font-size: 11px; color: #666;
+}
+.phone-frame .notch {
+  position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+  width: 120px; height: 28px;
+  background: #08080e; border-radius: 0 0 16px 16px;
+}
+
+/* scanner animation inside phone */
+.scanner-ui {
+  width: 100%; text-align: center;
+}
+.scanner-ui .viewport {
+  width: 180px; height: 180px; margin: 0 auto 20px;
+  position: relative; border-radius: 12px;
+  background: #0a0a14;
+  border: 2px solid rgba(0,230,118,.2);
+  display: flex; align-items: center; justify-content: center;
+}
+.scanner-ui .viewport .corner {
+  position: absolute; width: 20px; height: 20px;
+  border-color: #00e676; border-style: solid;
+}
+.scanner-ui .viewport .corner.tl { top: 6px; left: 6px; border-width: 2px 0 0 2px }
+.scanner-ui .viewport .corner.tr { top: 6px; right: 6px; border-width: 2px 2px 0 0 }
+.scanner-ui .viewport .corner.bl { bottom: 6px; left: 6px; border-width: 0 0 2px 2px }
+.scanner-ui .viewport .corner.br { bottom: 6px; right: 6px; border-width: 0 2px 2px 0 }
+.scanner-ui .viewport .scan-line {
+  position: absolute; left: 10%; right: 10%; height: 2px;
+  background: linear-gradient(90deg, transparent, #00e676, transparent);
+  animation: scanLine 2s ease-in-out infinite;
+}
+@keyframes scanLine {
+  0%, 100% { top: 10% }
+  50% { top: 85% }
+}
+.scanner-ui .viewport .barcode-icon {
+  opacity: .15; font-size: 64px; line-height: 1;
+}
+.scanner-ui .result-line {
+  height: 14px; width: 120px; margin: 0 auto 8px;
+  background: linear-gradient(90deg, transparent, #00e676, transparent);
+  border-radius: 100px; opacity: .4;
+}
+.scanner-ui .result-line.short { width: 80px }
+
+/* features grid */
+.features {
+  padding: 100px 0;
+  border-top: 1px solid rgba(255,255,255,.04);
+}
+.section-label {
+  display: block;
+  max-width: fit-content;
+  padding: 4px 12px; border-radius: 100px;
+  background: rgba(0,230,118,.08); border: 1px solid rgba(0,230,118,.15);
+  font-size: 12px; color: #00e676; text-transform: uppercase; letter-spacing: .08em;
+  margin: 0 auto 12px;
+}
+.section-title {
+  font-size: clamp(28px, 3.5vw, 42px); font-weight: 700;
+  margin-bottom: 16px;
+  text-align: center;
+}
+.section-sub {
+  color: #777; font-size: 17px; max-width: 600px; margin: 0 auto 56px;
+  text-align: center;
+}
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px;
+}
+.feature-card {
+  padding: 28px; border-radius: 16px;
+  background: rgba(255,255,255,.03);
+  border: 1px solid rgba(255,255,255,.06);
+  transition: transform .3s, border-color .3s, box-shadow .3s;
+}
+.feature-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(0,230,118,.15);
+  box-shadow: 0 12px 40px rgba(0,0,0,.3);
+}
+.feature-card .icon {
+  width: 48px; height: 48px; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px; margin-bottom: 16px;
+}
+.feature-card h3 { font-size: 18px; margin-bottom: 8px }
+.feature-card p { font-size: 14px; color: #888; line-height: 1.7 }
+
+/* how it works */
+.how-it-works { padding: 100px 0; border-top: 1px solid rgba(255,255,255,.04) }
+.steps { display: flex; gap: 24px; flex-wrap: wrap }
+.step {
+  flex: 1; min-width: 200px;
+  padding: 24px; border-radius: 16px;
+  background: rgba(255,255,255,.02);
+  border: 1px solid rgba(255,255,255,.05);
+  position: relative;
+}
+.step .num {
+  width: 36px; height: 36px; border-radius: 10px;
+  background: linear-gradient(135deg, rgba(0,230,118,.15), rgba(0,188,212,.1));
+  border: 1px solid rgba(0,230,118,.2);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; font-weight: 700; color: #00e676;
+  margin-bottom: 14px;
+}
+.step h4 { font-size: 16px; margin-bottom: 6px }
+.step p { font-size: 13px; color: #777 }
+
+/* download */
+.download { padding: 100px 0; border-top: 1px solid rgba(255,255,255,.04) }
+.download-cards { display: flex; gap: 24px; flex-wrap: wrap; justify-content: center }
+.download-card {
+  flex: 1; max-width: 360px;
+  padding: 36px; border-radius: 20px;
+  background: rgba(255,255,255,.03);
+  border: 1px solid rgba(255,255,255,.08);
+  text-align: center;
+  transition: transform .3s, border-color .3s;
+}
+.download-card:hover { transform: translateY(-4px); border-color: rgba(0,230,118,.2) }
+.download-card .icon-big { font-size: 48px; margin-bottom: 16px }
+.download-card h3 { font-size: 20px; margin-bottom: 8px }
+.download-card .ver { color: #555; font-size: 13px; margin-bottom: 20px }
+.download-card .features-list {
+  list-style: none; text-align: left; margin-bottom: 24px;
+}
+.download-card .features-list li {
+  padding: 6px 0; font-size: 14px; color: #999;
+  display: flex; align-items: center; gap: 8px;
+}
+.download-card .features-list li::before {
+  content: '\2713'; color: #00e676; font-weight: 700;
+}
+
+.btn-download {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 14px 36px; border-radius: 12px;
+  background: linear-gradient(135deg, #00e676, #00c853);
+  color: #08080e; font-weight: 700; font-size: 16px;
+  text-decoration: none; transition: transform .2s, box-shadow .2s;
+}
+.btn-download:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 32px rgba(0,230,118,.35);
+}
+
+/* footer */
+footer {
+  padding: 40px 0; border-top: 1px solid rgba(255,255,255,.04);
+  text-align: center; color: #444; font-size: 13px;
+}
+footer a { color: #666; text-decoration: none }
+footer a:hover { color: #00e676 }
+
+/* ---------- responsive ---------- */
+@media (max-width: 768px) {
+  nav { padding: 12px 16px }
+  nav .nav-links { display: none }
+  .hero .container { flex-direction: column; text-align: center; padding-top: 100px }
+  .hero p { margin-left: auto; margin-right: auto }
+  .hero-buttons { justify-content: center }
+  .phone-frame { width: 200px; height: 410px }
+  .scanner-ui .viewport { width: 140px; height: 140px }
+  .feature-grid { grid-template-columns: 1fr }
+  .steps { flex-direction: column }
+  .download-cards { flex-direction: column }
+}
+</style>
+</head>
+<body>
+
+<div id="particles"></div>
+
+<!-- nav -->
+<nav>
+  <div class="logo">SEW‑Помощник <small>v1.14</small></div>
+  <div class="nav-links">
+    <a href="#features">Возможности</a>
+    <a href="#how">Как работает</a>
+    <a href="#download">Скачать</a>
+  </div>
+</nav>
+
+<!-- hero -->
+<section class="hero" id="hero">
+  <div class="container">
+    <div class="hero-content">
+      <h1>Сканируй штрихкоды<br>прямо в <span>SEW</span></h1>
+      <p>
+        Плавучий сканер штрихкодов, который работает поверх любых приложений.
+        Автоматический ввод в SEW — без переключения между экранами.
+      </p>
+      <div class="hero-buttons">
+        <a href="https://github.com/Monutor/scanner-overlay/releases/download/v1.14.0/app-release.apk" class="btn btn-primary">Скачать APK</a>
+        <a href="#features" class="btn btn-secondary">Подробнее</a>
+      </div>
+    </div>
+    <div class="hero-visual">
+      <div class="phone-frame">
+        <div class="notch"></div>
+        <div class="status-bar"><span>12:00</span><span>📶 95%</span></div>
+        <div class="screen">
+          <div class="scanner-ui">
+            <div class="viewport">
+              <span class="corner tl"></span><span class="corner tr"></span>
+              <span class="corner bl"></span><span class="corner br"></span>
+              <div class="scan-line"></div>
+              <div class="barcode-icon">⊞</div>
+            </div>
+            <div class="result-line"></div>
+            <div class="result-line short"></div>
+            <div style="margin-top:16px;display:flex;gap:8px;justify-content:center">
+              <span style="width:30px;height:30px;border-radius:8px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:center;font-size:12px">⏺</span>
+              <span style="width:30px;height:30px;border-radius:8px;background:rgba(0,230,118,.12);border:1px solid rgba(0,230,118,.2);display:flex;align-items:center;justify-content:center;font-size:12px;color:#00e676">◉</span>
+              <span style="width:30px;height:30px;border-radius:8px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:center;font-size:12px">⚡</span>
+              <span style="width:30px;height:30px;border-radius:8px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:center;font-size:12px">✕</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- features -->
+<section class="features" id="features">
+  <div class="container">
+    <div class="section-label">Возможности</div>
+    <h2 class="section-title">Всё, что нужно для работы со штрихкодами</h2>
+    <p class="section-sub">Функции, которые реально ускоряют работу на складе</p>
+
+    <div class="feature-grid">
+      <div class="feature-card">
+        <div class="icon" style="background:rgba(0,230,118,.12);color:#00e676">📷</div>
+        <h3>Сканирование камерой</h3>
+        <p>Мгновенное распознавание EAN-13, UPC, QR, Code 128, Data Matrix и других форматов через ML Kit. Настраиваемая точность и таймаут.</p>
+      </div>
+      <div class="feature-card">
+        <div class="icon" style="background:rgba(0,230,118,.12);color:#00e676">↗️</div>
+        <h3>Автоввод в SEW</h3>
+        <p>Accessibility Service автоматически вводит отсканированный код в нужное поле и отправляет форму. Поддержка Яндекс.Браузера, Chrome, Edge, Brave.</p>
+      </div>
+      <div class="feature-card">
+        <div class="icon" style="background:rgba(0,230,118,.12);color:#00e676">🪟</div>
+        <h3>Плавающая панель</h3>
+        <p>Компактная панель с кнопками сканера, выбора полки и поиска товара — поверх любого приложения. Настраиваемая прозрачность и размер кнопок.</p>
+      </div>
+      <div class="feature-card">
+        <div class="icon" style="background:rgba(0,230,118,.12);color:#00e676">🏪</div>
+        <h3>Поиск полок и товаров</h3>
+        <p>Встроенная база полок: сканируете штрихкод — получаете номер стеллажа, секции и уровень. TTS озвучивает голосом. Поиск товаров по артикулу через WebView.</p>
+      </div>
+      <div class="feature-card">
+        <div class="icon" style="background:rgba(0,230,118,.12);color:#00e676">🔧</div>
+        <h3>Калибровка SEW</h3>
+        <p>Двухточечная калибровка под ваш экран: укажите где кнопка «Ручной ввод» и «Готово» — приложение будет нажимать их автоматически.</p>
+      </div>
+      <div class="feature-card">
+        <div class="icon" style="background:rgba(0,230,118,.12);color:#00e676">🔄</div>
+        <h3>Автообновление</h3>
+        <p>Приложение само проверяет новые версии на GitHub и предлагает установить обновление. Базы полок и товаров синхронизируются автоматически.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- how it works -->
+<section class="how-it-works" id="how">
+  <div class="container">
+    <div class="section-label">Как работает</div>
+    <h2 class="section-title">Три простых шага</h2>
+    <p class="section-sub">Всё настроено за минуту — и можно работать</p>
+
+    <div class="steps">
+      <div class="step">
+        <div class="num">1</div>
+        <h4>Установите приложение</h4>
+        <p>Скачайте APK и установите. Предоставьте разрешения: камера, поверх других приложений, Accessibility Service.</p>
+      </div>
+      <div class="step">
+        <div class="num">2</div>
+        <h4>Откройте SEW в браузере</h4>
+        <p>Зайдите в SEW через Яндекс.Браузер или Chrome. Калибровка под ваш экран — один раз.</p>
+      </div>
+      <div class="step">
+        <div class="num">3</div>
+        <h4>Нажмите кнопку сканера</h4>
+        <p>Наведите камеру на штрихкод — код автоматически введётся в SEW. Никакого копирования и переключений.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- download -->
+<section class="download" id="download">
+  <div class="container">
+    <div class="section-label">Скачать</div>
+    <h2 class="section-title">Начните работать быстрее</h2>
+    <p class="section-sub">Скачайте последнюю версию SEW-Помощник прямо сейчас</p>
+
+    <div class="download-cards">
+      <div class="download-card">
+        <div class="icon-big">📦</div>
+        <h3>SEW-Помощник</h3>
+        <div class="ver">Версия 1.14.0 • 24 выпуск</div>
+        <ul class="features-list">
+          <li>Сканирование штрихкодов камерой</li>
+          <li>Автоматический ввод в SEW</li>
+          <li>Плавающая панель поверх приложений</li>
+          <li>База полок и товаров</li>
+          <li>Голосовое озвучивание (TTS)</li>
+          <li>Автообновление</li>
+        </ul>
+        <a href="https://github.com/Monutor/scanner-overlay/releases/download/v1.14.0/app-release.apk" class="btn-download" target="_blank">⬇ Скачать APK</a>
+        <p style="margin-top:12px;font-size:12px;color:#555">
+          Android 8.0+ • 23.4 MB
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- footer -->
+<footer>
+  <div class="container">
+    <p>SEW-Помощник © 2026 by Monutor</p>
+  </div>
+</footer>
+
+<script>
+/* particles */
+(function(){
+  const c = document.getElementById('particles');
+  for(let i=0;i<40;i++){
+    const s = document.createElement('span');
+    s.style.left=Math.random()*100+'%';
+    s.style.width=s.style.height=Math.random()*2+1+'px';
+    s.style.animationDuration=Math.random()*15+10+'s';
+    s.style.animationDelay=Math.random()*15+'s';
+    s.style.opacity=Math.random()*.3;
+    c.appendChild(s);
+  }
+})();
+</script>
+
+</body>
+</html>
