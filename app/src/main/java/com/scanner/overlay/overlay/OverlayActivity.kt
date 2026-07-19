@@ -32,8 +32,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
+
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
@@ -44,7 +43,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -205,6 +203,8 @@ class OverlayActivity : ComponentActivity() {
 
         val tapToFocusEnabled = prefs.getBoolean("tap_to_focus_enabled", true)
         val autoFocusEnabled = prefs.getBoolean("auto_focus_enabled", false)
+        val sewCalibrated = buildSewCalibration().isCalibrated
+        val autoImportSew = prefs.getBoolean("auto_import_sew", false)
 
         setContent {
             val viewModel = hiltViewModel<OverlayViewModel>()
@@ -224,10 +224,10 @@ class OverlayActivity : ComponentActivity() {
                         onRetry = {
                             viewModel.resetToScanning()
                         },
-                        onRequestInputFocus = { requestInputFocus() },
-                        onReleaseInputFocus = { releaseInputFocus() },
                         tapToFocusEnabled = tapToFocusEnabled,
-                        autoFocusEnabled = autoFocusEnabled
+                        autoFocusEnabled = autoFocusEnabled,
+                        sewCalibrated = sewCalibrated,
+                        autoImportSew = autoImportSew
                     )
                 }
             }
@@ -273,14 +273,6 @@ class OverlayActivity : ComponentActivity() {
             android.util.Log.e("OverlayActivity", "copyToClipboard error", e)
         }
         if (!isFinishing) finish()
-    }
-
-    private fun requestInputFocus() {
-        window.clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
-    }
-
-    private fun releaseInputFocus() {
-        window.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
     }
 
     private fun setupVibrator() {
@@ -355,15 +347,16 @@ fun OverlayContent(
     onInjectToSew: (String) -> Unit,
     onCopyToClipboard: (String) -> Unit,
     onRetry: () -> Unit = {},
-    onRequestInputFocus: () -> Unit = {},
-    onReleaseInputFocus: () -> Unit = {},
     tapToFocusEnabled: Boolean = true,
-    autoFocusEnabled: Boolean = false
+    autoFocusEnabled: Boolean = false,
+    sewCalibrated: Boolean = false,
+    autoImportSew: Boolean = false
 ) {
     val state by viewModel.state.collectAsState()
     val isTimedOut by viewModel.isScanTimedOut.collectAsState()
-    var manualInput by remember { mutableStateOf("") }
-    var showManualInput by remember { mutableStateOf(false) }
+    val isCameraError by viewModel.isCameraError.collectAsState()
+    val cameraInitAttempt by viewModel.cameraInitAttempt.collectAsState()
+    var isCameraReady by remember { mutableStateOf(false) }
     var torchOn by remember { mutableStateOf(false) }
     var detectedBarcode by remember { mutableStateOf(false) }
     var cameraControl by remember { mutableStateOf<CameraControl?>(null) }
@@ -372,10 +365,6 @@ fun OverlayContent(
     var focusSuccess by remember { mutableStateOf<Boolean?>(null) }
     val coroutineScope = rememberCoroutineScope()
     val isSubmitting by isSubmittingToSew
-
-    LaunchedEffect(showManualInput) {
-        if (showManualInput) onRequestInputFocus() else onReleaseInputFocus()
-    }
 
     LaunchedEffect(state, autoFocusEnabled, cameraControl, previewView) {
         if (!autoFocusEnabled) return@LaunchedEffect
@@ -457,41 +446,61 @@ fun OverlayContent(
                         }
                     }
             ) {
-                    CameraPreview(
-                    torchOn = torchOn,
-                    onCameraReady = { control, view ->
-                        cameraControl = control
-                        previewView = view
-                    },
+                    key(cameraInitAttempt) {
+                        CameraPreview(
+                            torchOn = torchOn,
+                            onCameraReady = { control, view ->
+                                cameraControl = control
+                                previewView = view
+                                isCameraReady = true
+                            },
+                            onCameraError = { e ->
+                                android.util.Log.e("OverlayActivity", "Camera init failed", e)
+                                viewModel.onCameraError()
+                            },
                             onBarcodeScanned = { result ->
                                 try {
-                                    if (showManualInput) {
-                                        manualInput = result.barcode
-                                    } else {
-                                        coroutineScope.launch {
-                                            try {
-                                                detectedBarcode = true
-                                                onBarcodeScanned(result.barcode)
-                                                delay(500)
+                                    coroutineScope.launch {
+                                        try {
+                                            detectedBarcode = true
+                                            onBarcodeScanned(result.barcode)
+                                            delay(500)
+                                            if (sewCalibrated && autoImportSew) {
+                                                onCopyToClipboard(result.barcode)
+                                                onInjectToSew(result.barcode)
+                                            } else {
                                                 viewModel.onBarcodeDetected(result)
-                                            } catch (e: kotlinx.coroutines.CancellationException) {
-                                                throw e
-                                            } catch (e: Exception) {
-                                                android.util.Log.e("ScanFlow", "launch crash", e)
                                             }
+                                        } catch (e: kotlinx.coroutines.CancellationException) {
+                                            throw e
+                                        } catch (e: Exception) {
+                                            android.util.Log.e("ScanFlow", "launch crash", e)
                                         }
                                     }
                                 } catch (e: Exception) {
                                     android.util.Log.e("ScanFlow", "outer crash", e)
                                 }
                             },
-                    onShowManualInput = { barcode ->
-                        showManualInput = true
-                        manualInput = barcode
-                    },
-                    resetScanCompleted = state is OverlayViewModel.OverlayState.Scanning,
-                    modifier = Modifier.fillMaxSize()
-                )
+                            resetScanCompleted = state is OverlayViewModel.OverlayState.Scanning,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    // Loading overlay (shown while camera initializing)
+                    if (!isCameraReady && state is OverlayViewModel.OverlayState.Scanning && !isCameraError) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color(0xE6000000)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(36.dp),
+                                color = Color(0xFF4CAF50),
+                                strokeWidth = 3.dp
+                            )
+                        }
+                    }
 
                 // Green highlight box (centered, on detection)
                 if (detectedBarcode) {
@@ -508,7 +517,7 @@ fun OverlayContent(
 
                 // Corner accents + scan line (only during active scanning)
                 if (state !is OverlayViewModel.OverlayState.Success
-                    && state !is OverlayViewModel.OverlayState.Error && !isTimedOut && !showManualInput) {
+                    && state !is OverlayViewModel.OverlayState.Error && !isTimedOut) {
 
                     // Green corner accents
                     Canvas(Modifier.fillMaxSize()) {
@@ -545,7 +554,7 @@ fun OverlayContent(
             }
             // Text + buttons (only during active scanning)
             if (state !is OverlayViewModel.OverlayState.Success
-                && state !is OverlayViewModel.OverlayState.Error && !isTimedOut && !showManualInput) {
+                && state !is OverlayViewModel.OverlayState.Error && !isTimedOut) {
                 Spacer(Modifier.height(24.dp))
 
                 Text(
@@ -571,16 +580,6 @@ fun OverlayContent(
                     ) {
                         Text("⚡", fontSize = 14.sp,
                             color = if (torchOn) Color(0xFFFFD600) else Color(0x99FFFFFF))
-                    }
-                    Box(
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color(0x1AFFFFFF))
-                            .clickable { showManualInput = true },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("⌨", fontSize = 14.sp, color = Color(0xCCFFFFFF))
                     }
                     Box(
                         modifier = Modifier
@@ -625,75 +624,6 @@ fun OverlayContent(
                             fontSize = 18.sp,
                             color = Color.White
                         )
-                    }
-                }
-            }
-
-            showManualInput -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color(0xCC000000))
-                        .clickable(enabled = false) {},
-                    contentAlignment = Alignment.Center
-                ) {
-                    Card(
-                        modifier = Modifier
-                            .padding(24.dp)
-                            .fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White)
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                "Ручной ввод",
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(Modifier.height(16.dp))
-                            OutlinedTextField(
-                                value = manualInput,
-                                onValueChange = { manualInput = it },
-                                label = { Text("Штрихкод") },
-                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                                keyboardActions = KeyboardActions(
-                                    onDone = {
-                                        if (manualInput.isNotBlank()) {
-                                            val b = manualInput
-                                            showManualInput = false
-                                            onBarcodeScanned(b)
-                                            onInjectToSew(b)
-                                        }
-                                    }
-                                ),
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Spacer(Modifier.height(16.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceEvenly
-                            ) {
-                                OutlinedButton(onClick = { showManualInput = false }) {
-                                    Text("Назад")
-                                }
-                                Button(
-                                    onClick = {
-                                        if (manualInput.isNotBlank()) {
-                                            val b = manualInput
-                                            showManualInput = false
-                                            onBarcodeScanned(b)
-                                            onInjectToSew(b)
-                                        }
-                                    }
-                                ) {
-                                    Text("Готово")
-                                }
-                            }
-                        }
                     }
                 }
             }
@@ -790,14 +720,14 @@ fun OverlayContent(
                         }
                         Spacer(Modifier.height(16.dp))
                         Text(
-                            "Время ожидания истекло",
+                            if (isCameraError) "Ошибка камеры" else "Время ожидания истекло",
                             fontWeight = FontWeight.Bold,
                             fontSize = 18.sp,
                             color = Color.White
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "Не удалось распознать штрихкод",
+                            if (isCameraError) "Не удалось запустить камеру.\nПопробуйте повторить" else "Не удалось распознать штрихкод",
                             color = Color(0xAAFFFFFF),
                             fontSize = 13.sp
                         )
@@ -810,16 +740,6 @@ fun OverlayContent(
                             )
                         ) {
                             Text("Повторить", color = Color.White)
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        Button(
-                            onClick = { showManualInput = true },
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0x33FFFFFF)
-                            )
-                        ) {
-                            Text("Ввести вручную", color = Color.White)
                         }
                         Spacer(Modifier.height(8.dp))
                         TextButton(onClick = onClose) {
@@ -836,9 +756,9 @@ fun OverlayContent(
 fun CameraPreview(
     torchOn: Boolean = false,
     onBarcodeScanned: (ScannerResult.Success) -> Unit,
-    onShowManualInput: ((String) -> Unit)? = null,
     resetScanCompleted: Boolean = false,
     onCameraReady: (CameraControl, PreviewView) -> Unit = { _, _ -> },
+    onCameraError: (Exception) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -893,42 +813,42 @@ fun CameraPreview(
 
             val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
             cameraProviderFuture.addListener({
-                val cameraProvider = cameraProviderFuture.get()
-                cameraProviderRef.value = cameraProvider
-                val preview = Preview.Builder().build().also {
-                    it.setSurfaceProvider(previewView.surfaceProvider)
-                }
-                val imageAnalysis = ImageAnalysis.Builder()
-                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .apply {
-                        val quality = ctx.getSharedPreferences("scanner_prefs", android.content.Context.MODE_PRIVATE)
-                            .getInt("scan_quality", 1)
-                        val resolution = when (quality) {
-                            0 -> android.util.Size(640, 360)
-                            2 -> android.util.Size(1920, 1080)
-                            else -> android.util.Size(1280, 720)
-                        }
-                        setDefaultResolution(resolution)
+                try {
+                    val cameraProvider = cameraProviderFuture.get()
+                    cameraProviderRef.value = cameraProvider
+                    val preview = Preview.Builder().build().also {
+                        it.setSurfaceProvider(previewView.surfaceProvider)
                     }
-                    .build()
-                imageAnalysis.setAnalyzer(
-                    analyzerExecutor,
-                    BarcodeAnalyzer(
-                        executor = analyzerExecutor,
-                        onResult = { result ->
-                            cameraFrameHandler.post {
-                                try {
-                                    if (result is ScannerResult.Success && scanCompleted.compareAndSet(false, true)) {
-                                        onBarcodeScanned(result)
+                    val imageAnalysis = ImageAnalysis.Builder()
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                        .apply {
+                            val quality = ctx.getSharedPreferences("scanner_prefs", android.content.Context.MODE_PRIVATE)
+                                .getInt("scan_quality", 1)
+                            val resolution = when (quality) {
+                                0 -> android.util.Size(640, 360)
+                                2 -> android.util.Size(1920, 1080)
+                                else -> android.util.Size(1280, 720)
+                            }
+                            setDefaultResolution(resolution)
+                        }
+                        .build()
+                    imageAnalysis.setAnalyzer(
+                        analyzerExecutor,
+                        BarcodeAnalyzer(
+                            executor = analyzerExecutor,
+                            onResult = { result ->
+                                cameraFrameHandler.post {
+                                    try {
+                                        if (result is ScannerResult.Success && scanCompleted.compareAndSet(false, true)) {
+                                            onBarcodeScanned(result)
+                                        }
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("CameraPreview", "handler crash", e)
                                     }
-                                } catch (e: Exception) {
-                                    android.util.Log.e("CameraPreview", "handler crash", e)
                                 }
                             }
-                        }
-                    ).also { scannerRef.value = it }
-                )
-                try {
+                        ).also { scannerRef.value = it }
+                    )
                     cameraProvider.unbindAll()
                     val camera = cameraProvider.bindToLifecycle(
                         lifecycleOwner,
@@ -939,7 +859,8 @@ fun CameraPreview(
                     cameraControl.value = camera.cameraControl
                     onCameraReady(camera.cameraControl, previewView)
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    android.util.Log.e("CameraPreview", "bindToLifecycle failed", e)
+                    onCameraError(e)
                 }
             }, androidx.core.content.ContextCompat.getMainExecutor(ctx))
 

@@ -16,8 +16,8 @@ android {
         applicationId = "com.scanner.overlay"
         minSdk = 26
         targetSdk = 36
-        versionCode = 24
-        versionName = "1.14.0"
+        versionCode = 25
+        versionName = "1.15.0"
         var token = ""
         val propsFile = rootProject.file("local.properties")
         if (propsFile.exists()) {
