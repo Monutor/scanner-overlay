@@ -18,6 +18,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.Accessibility
@@ -115,6 +116,7 @@ fun SettingsScreen(
     val sewCalibration by viewModel.sewCalibration.collectAsState()
     val sewTestResult by viewModel.sewTestResult.collectAsState()
     val awaitingSewCalibration by viewModel.awaitingSewCalibration.collectAsState()
+    val autoImportSew by viewModel.autoImportSew.collectAsState()
     val tapToFocusEnabled by viewModel.tapToFocusEnabled.collectAsState()
     val autoFocusEnabled by viewModel.autoFocusEnabled.collectAsState()
     val isTtsEnabled by viewModel.isTtsEnabled.collectAsState()
@@ -251,6 +253,8 @@ fun SettingsScreen(
                     calibration = sewCalibration,
                     testResult = sewTestResult,
                     awaiting = awaitingSewCalibration,
+                    autoImportSew = autoImportSew,
+                    onAutoImportSewToggle = { viewModel.setAutoImportSew(it) },
                     installedApps = installedApps,
                     currentPackageLabel = installedApps.firstOrNull { it.packageName == sewCalibration.targetPackage }?.label,
                     onPickApp = { viewModel.setSewTargetPackage(it) },
@@ -935,6 +939,8 @@ private fun SewCalibrationCard(
     calibration: SewCalibration,
     testResult: SewTestResult,
     awaiting: Boolean,
+    autoImportSew: Boolean = false,
+    onAutoImportSewToggle: (Boolean) -> Unit = {},
     installedApps: List<AppInfo>,
     currentPackageLabel: String?,
     onPickApp: (String) -> Unit,
@@ -993,6 +999,19 @@ private fun SewCalibrationCard(
                 if (calibration.isCalibrated) {
                     StatusPill(label = "Готово", granted = true)
                 }
+            }
+
+            if (calibration.isCalibrated && !awaiting) {
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                FloatingToggleRow(
+                    color = BlueFab,
+                    icon = Icons.Default.PlayArrow,
+                    title = "Быстрый ввод в SEW",
+                    subtitle = "При скане сразу вводить штрихкод без экрана успеха",
+                    checked = autoImportSew,
+                    enabled = true,
+                    onCheckedChange = onAutoImportSewToggle
+                )
             }
 
             if (!awaiting) {

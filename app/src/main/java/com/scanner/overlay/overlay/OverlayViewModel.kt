@@ -26,6 +26,12 @@ class OverlayViewModel @Inject constructor(
     private val _isScanTimedOut = MutableStateFlow(false)
     val isScanTimedOut: StateFlow<Boolean> = _isScanTimedOut.asStateFlow()
 
+    private val _isCameraError = MutableStateFlow(false)
+    val isCameraError: StateFlow<Boolean> = _isCameraError.asStateFlow()
+
+    private val _cameraInitAttempt = MutableStateFlow(0)
+    val cameraInitAttempt: StateFlow<Int> = _cameraInitAttempt.asStateFlow()
+
     private var timeoutJob: kotlinx.coroutines.Job? = null
 
     init {
@@ -43,6 +49,11 @@ class OverlayViewModel @Inject constructor(
         _state.value = OverlayState.Success(result.barcode)
     }
 
+    fun onCameraError() {
+        _isCameraError.value = true
+        _state.value = OverlayState.Error
+    }
+
     fun onScanError() {
         _state.value = OverlayState.Error
     }
@@ -50,7 +61,9 @@ class OverlayViewModel @Inject constructor(
     fun resetToScanning() {
         timeoutJob?.cancel()
         _isScanTimedOut.value = false
+        _isCameraError.value = false
         _state.value = OverlayState.Scanning
+        _cameraInitAttempt.value = _cameraInitAttempt.value + 1
         startTimeout()
     }
 

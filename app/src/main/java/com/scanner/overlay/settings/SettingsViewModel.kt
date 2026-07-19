@@ -79,6 +79,7 @@ class SettingsViewModel @Inject constructor(
         const val PREF_KEY_FOCUS_HINT_SHOWN = "focus_hint_shown"
         const val PREF_KEY_AUTO_FOCUS_ENABLED = "auto_focus_enabled"
         private const val PREF_KEY_TTS_ENABLED = "tts_enabled"
+        const val PREF_KEY_AUTO_IMPORT_SEW = "auto_import_sew"
         private const val PREF_KEY_PANEL_EDGE = "panel_edge"
         private const val PREF_KEY_BTN_SIZE = "panel_btn_size"
         private const val PREF_KEY_OPACITY = "panel_opacity"
@@ -102,6 +103,11 @@ class SettingsViewModel @Inject constructor(
         prefs.getBoolean(PREF_KEY_TTS_ENABLED, false)
     )
     val isTtsEnabled: StateFlow<Boolean> = _isTtsEnabled.asStateFlow()
+
+    private val _autoImportSew = MutableStateFlow(
+        prefs.getBoolean(PREF_KEY_AUTO_IMPORT_SEW, false)
+    )
+    val autoImportSew: StateFlow<Boolean> = _autoImportSew.asStateFlow()
 
     private val _panelEdge = MutableStateFlow(
         prefs.getString(PREF_KEY_PANEL_EDGE, "right") ?: "right"
@@ -311,6 +317,12 @@ class SettingsViewModel @Inject constructor(
         if (_isTtsEnabled.value == enabled) return
         _isTtsEnabled.value = enabled
         prefs.edit().putBoolean(PREF_KEY_TTS_ENABLED, enabled).apply()
+    }
+
+    fun setAutoImportSew(enabled: Boolean) {
+        if (_autoImportSew.value == enabled) return
+        _autoImportSew.value = enabled
+        prefs.edit().putBoolean(PREF_KEY_AUTO_IMPORT_SEW, enabled).apply()
     }
 
     fun setPanelEdge(edge: String) {
