@@ -1,12 +1,16 @@
 package com.scanner.overlay.settings
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -18,6 +22,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -72,6 +77,18 @@ private fun ArticleBarcodeScreen() {
         }
     }
 
+    val qrScannerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val scannedText = result.data?.getStringExtra(QrScannerActivity.EXTRA_SCANNED_TEXT)
+                ?: return@rememberLauncherForActivityResult
+            val articleCode = extractArticleCode(scannedText) ?: scannedText
+            query = articleCode
+            doSearch()
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -110,6 +127,14 @@ private fun ArticleBarcodeScreen() {
                     shape = CircleShape
                 ) {
                     Icon(Icons.Default.Search, contentDescription = "Найти")
+                }
+                IconButton(
+                    onClick = {
+                        val intent = Intent(context, QrScannerActivity::class.java)
+                        qrScannerLauncher.launch(intent)
+                    }
+                ) {
+                    Icon(Icons.Default.QrCode, contentDescription = "Сканировать QR")
                 }
             }
 
@@ -205,4 +230,8 @@ private fun ArticleBarcodeScreen() {
             }
         }
     }
+}
+
+private fun extractArticleCode(url: String): String? {
+    return Regex("""mvideo\.ru/products/(\d+)""").find(url)?.groupValues?.get(1)
 }

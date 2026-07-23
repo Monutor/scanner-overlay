@@ -73,6 +73,10 @@
             android:turnScreenOn="true"
             android:theme="@style/Theme.ScannerOverlay.Transparent" />
 
+        <activity
+            android:name=".settings.QrScannerActivity"
+            android:exported="false" />
+
         <service
             android:name=".service.ScannerForegroundService"
             android:exported="false"

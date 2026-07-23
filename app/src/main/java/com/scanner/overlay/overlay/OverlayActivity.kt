@@ -71,6 +71,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import androidx.compose.runtime.DisposableEffect
 import com.scanner.overlay.R
 import com.scanner.overlay.accessibility.ScannerAccessibilityService
+import com.scanner.overlay.scanner.ArticleBarcodeDatabase
 import com.scanner.overlay.scanner.BarcodeAnalyzer
 import com.scanner.overlay.scanner.BarcodeDatabase
 import com.scanner.overlay.scanner.ScanHistoryEntry
@@ -214,7 +215,7 @@ class OverlayActivity : ComponentActivity() {
                         viewModel = viewModel,
                         isSubmittingToSew = isSubmittingToSew,
                         onClose = { finish() },
-                        onBarcodeScanned = { barcode -> onBarcodeScanned(barcode) },
+                        onBarcodeScanned = { barcode, productName -> onBarcodeScanned(barcode, productName) },
                         onInjectToSew = { barcode ->
                             triggerSewAutoInput(barcode)
                         },
@@ -242,12 +243,12 @@ class OverlayActivity : ComponentActivity() {
         }
     }
 
-    fun onBarcodeScanned(barcode: String) {
+    fun onBarcodeScanned(barcode: String, productName: String? = null) {
         try {
             vibrate()
             playBeep()
             speakShelfName(barcode)
-            ScanHistoryEntry.add(prefs, barcode)
+            ScanHistoryEntry.add(prefs, barcode, productName)
         } catch (e: Exception) {
             android.util.Log.e("OverlayActivity", "onBarcodeScanned crash", e)
         }
@@ -343,7 +344,7 @@ fun OverlayContent(
     viewModel: OverlayViewModel,
     isSubmittingToSew: State<Boolean> = remember { mutableStateOf(false) },
     onClose: () -> Unit,
-    onBarcodeScanned: (String) -> Unit,
+    onBarcodeScanned: (String, String?) -> Unit,
     onInjectToSew: (String) -> Unit,
     onCopyToClipboard: (String) -> Unit,
     onRetry: () -> Unit = {},
@@ -364,6 +365,7 @@ fun OverlayContent(
     var focusPoint by remember { mutableStateOf<Offset?>(null) }
     var focusSuccess by remember { mutableStateOf<Boolean?>(null) }
     val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
     val isSubmitting by isSubmittingToSew
 
     LaunchedEffect(state, autoFocusEnabled, cameraControl, previewView) {
@@ -459,26 +461,44 @@ fun OverlayContent(
                                 viewModel.onCameraError()
                             },
                             onBarcodeScanned = { result ->
-                                try {
-                                    coroutineScope.launch {
-                                        try {
-                                            detectedBarcode = true
-                                            onBarcodeScanned(result.barcode)
-                                            delay(500)
-                                            if (sewCalibrated && autoImportSew) {
-                                                onCopyToClipboard(result.barcode)
-                                                onInjectToSew(result.barcode)
+                                coroutineScope.launch {
+                                    try {
+                                        detectedBarcode = true
+                                        delay(500)
+                                        val scannedUrl = result.barcode.trim()
+                                        val articleCode = try {
+                                            Regex("""mvideo\.ru/products/(\d+)""").find(scannedUrl)?.groupValues?.get(1)
+                                        } catch (e: Exception) {
+                                            null
+                                        }
+                                        val product = if (articleCode != null) {
+                                            ArticleBarcodeDatabase.init(context)
+                                            ArticleBarcodeDatabase.searchByArticleCode(articleCode)
+                                        } else null
+                                        val resolvedBarcode = when {
+                                            product != null -> product.barcode
+                                            articleCode != null -> articleCode
+                                            else -> result.barcode
+                                        }
+                                        onBarcodeScanned(resolvedBarcode, product?.name)
+                                        val resolvedResult = ScannerResult.Success(resolvedBarcode, result.format)
+                                        if (sewCalibrated && autoImportSew) {
+                                            onCopyToClipboard(resolvedBarcode)
+                                            onInjectToSew(resolvedBarcode)
+                                        } else {
+                                            if (product != null) {
+                                                viewModel.onBarcodeDetected(resolvedResult, product.name, articleCode)
+                                            } else if (articleCode != null) {
+                                                viewModel.onBarcodeDetected(resolvedResult, articleCode = articleCode)
                                             } else {
                                                 viewModel.onBarcodeDetected(result)
                                             }
-                                        } catch (e: kotlinx.coroutines.CancellationException) {
-                                            throw e
-                                        } catch (e: Exception) {
-                                            android.util.Log.e("ScanFlow", "launch crash", e)
                                         }
+                                    } catch (e: kotlinx.coroutines.CancellationException) {
+                                        throw e
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("ScanFlow", "launch crash", e)
                                     }
-                                } catch (e: Exception) {
-                                    android.util.Log.e("ScanFlow", "outer crash", e)
                                 }
                             },
                             resetScanCompleted = state is OverlayViewModel.OverlayState.Scanning,
@@ -629,7 +649,12 @@ fun OverlayContent(
             }
 
             state is OverlayViewModel.OverlayState.Success -> {
-                val barcode = (state as OverlayViewModel.OverlayState.Success).barcode
+                val s = state as OverlayViewModel.OverlayState.Success
+                val displayLabel = when {
+                    s.productName != null -> "Арт. ${s.articleCode}\n${s.productName}"
+                    s.articleCode != null -> "Арт. ${s.articleCode}"
+                    else -> s.barcode
+                }
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -653,7 +678,7 @@ fun OverlayContent(
                         }
                         Spacer(Modifier.height(16.dp))
                         Text(
-                            text = barcode,
+                            text = displayLabel,
                             fontWeight = FontWeight.Bold,
                             fontSize = 18.sp,
                             textAlign = TextAlign.Center,
@@ -661,14 +686,14 @@ fun OverlayContent(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "Штрихкод найден",
+                            if (s.productName != null) "QR-код ценника" else "Штрихкод найден",
                             color = Color(0xAAFFFFFF),
                             fontSize = 13.sp,
                             letterSpacing = 1.sp
                         )
                         Spacer(Modifier.height(24.dp))
                         Button(
-                            onClick = { onCopyToClipboard(barcode) },
+                            onClick = { onCopyToClipboard(s.barcode) },
                             shape = RoundedCornerShape(14.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = Color(0xFF7B1FA2)
@@ -679,7 +704,7 @@ fun OverlayContent(
                         }
                         Spacer(Modifier.height(8.dp))
                         Button(
-                            onClick = { onInjectToSew(barcode) },
+                            onClick = { onInjectToSew(s.barcode) },
                             shape = RoundedCornerShape(14.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = Color(0xFF4CAF50)
@@ -777,6 +802,7 @@ fun CameraPreview(
     }
     val cameraProviderRef = remember { mutableStateOf<ProcessCameraProvider?>(null) }
     val analyzerExecutor = remember { java.util.concurrent.Executors.newSingleThreadScheduledExecutor() }
+    val isActive = remember { AtomicBoolean(true) }
 
     LaunchedEffect(torchOn, cameraControl.value) {
         try {
@@ -790,17 +816,19 @@ fun CameraPreview(
                 cameraProviderRef.value?.unbindAll()
                 cameraControl.value = null
                 cameraProviderRef.value = null
-                analyzerExecutor.shutdown()
+                analyzerExecutor.shutdownNow()
                 scannerRef.value?.close()
                 scannerRef.value = null
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
+            isActive.set(false)
             lifecycleOwner.lifecycle.removeObserver(observer)
             cameraProviderRef.value?.unbindAll()
             cameraControl.value = null
-            analyzerExecutor.shutdown()
+            cameraProviderRef.value = null
+            analyzerExecutor.shutdownNow()
             scannerRef.value?.close()
             scannerRef.value = null
         }
@@ -813,6 +841,11 @@ fun CameraPreview(
 
             val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
             cameraProviderFuture.addListener({
+                if (!isActive.get()) {
+                    android.util.Log.d("CameraPreview", "Skipping camera init: composable disposed")
+                    return@addListener
+                }
+
                 try {
                     val cameraProvider = cameraProviderFuture.get()
                     cameraProviderRef.value = cameraProvider
@@ -832,9 +865,12 @@ fun CameraPreview(
                             setDefaultResolution(resolution)
                         }
                         .build()
+                    val scanQrCodePref = ctx.getSharedPreferences("scanner_prefs", android.content.Context.MODE_PRIVATE)
+                        .getBoolean("scan_qr_code", true)
                     imageAnalysis.setAnalyzer(
                         analyzerExecutor,
                         BarcodeAnalyzer(
+                            scanQrCode = scanQrCodePref,
                             executor = analyzerExecutor,
                             onResult = { result ->
                                 cameraFrameHandler.post {

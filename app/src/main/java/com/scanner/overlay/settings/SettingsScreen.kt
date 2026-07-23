@@ -1,6 +1,7 @@
 package com.scanner.overlay.settings
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -120,6 +121,7 @@ fun SettingsScreen(
     val tapToFocusEnabled by viewModel.tapToFocusEnabled.collectAsState()
     val autoFocusEnabled by viewModel.autoFocusEnabled.collectAsState()
     val isTtsEnabled by viewModel.isTtsEnabled.collectAsState()
+    val scanQrCode by viewModel.scanQrCode.collectAsState()
     val scanHistory by viewModel.scanHistory.collectAsState()
 
     val productImportLauncher = rememberLauncherForActivityResult(
@@ -229,6 +231,11 @@ fun SettingsScreen(
                     onQualityChange = { viewModel.updateScanQuality(it) }
                 )
 
+                ScanQrCodeCard(
+                    enabled = scanQrCode,
+                    onToggle = { viewModel.setScanQrCode(it) }
+                )
+
                 TapToFocusCard(
                     enabled = tapToFocusEnabled,
                     onToggle = { viewModel.setTapToFocusEnabled(it) },
@@ -246,6 +253,8 @@ fun SettingsScreen(
                     onOpenOverlaySettings = { viewModel.openOverlaySettings() },
                     onOpenAccessibilitySettings = { viewModel.openAccessibilitySettings() }
                 )
+
+                RestartProcessCard()
 
                 SectionEyebrow("Интеграция с SEW")
 
@@ -723,6 +732,29 @@ private fun ScanQualityCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ScanQrCodeCard(
+    enabled: Boolean,
+    onToggle: (Boolean) -> Unit,
+) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        )
+    ) {
+        FloatingToggleRow(
+            color = Color(0xFF1565C0),
+            icon = Icons.Default.QrCode,
+            title = "QR-коды",
+            subtitle = if (enabled) "Распознавать QR-коды на ценниках" else "Игнорировать QR-коды",
+            checked = enabled,
+            enabled = true,
+            onCheckedChange = onToggle
+        )
     }
 }
 
@@ -1491,6 +1523,77 @@ private fun UpdateCard(
 
 
 @Composable
+private fun RestartProcessCard() {
+    val context = LocalContext.current
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        )
+    ) {
+        Column(modifier = Modifier.padding(vertical = 4.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.errorContainer),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Перезапуск приложения",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = "Если камера перестала работать",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Button(
+                    onClick = {
+                        val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+                        intent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                        context.startActivity(intent!!)
+                        Runtime.getRuntime().exit(0)
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("Перезапустить процесс", style = MaterialTheme.typography.labelLarge)
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun TtsToggleCard(
     enabled: Boolean,
     onToggle: (Boolean) -> Unit,
@@ -1568,7 +1671,7 @@ private fun HistoryRow(
     dateFormat: java.text.SimpleDateFormat
 ) {
     val barcode = entry.barcode
-    val shelfName = com.scanner.overlay.scanner.BarcodeDatabase.getByBarcode(barcode)?.name
+    val shelfName = entry.productName ?: com.scanner.overlay.scanner.BarcodeDatabase.getByBarcode(barcode)?.name
     Row(
         modifier = Modifier
             .fillMaxWidth()

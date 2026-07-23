@@ -6,7 +6,8 @@ import org.json.JSONObject
 
 data class ScanHistoryEntry(
     val barcode: String,
-    val timestamp: Long
+    val timestamp: Long,
+    val productName: String? = null
 ) {
     companion object {
         private const val PREF_KEY = "scan_history"
@@ -21,7 +22,8 @@ data class ScanHistoryEntry(
                     val obj = arr.getJSONObject(i)
                     list.add(ScanHistoryEntry(
                         barcode = obj.getString("b"),
-                        timestamp = obj.getLong("t")
+                        timestamp = obj.getLong("t"),
+                        productName = if (obj.has("n")) obj.getString("n") else null
                     ))
                 }
                 return list.sortedByDescending { it.timestamp }
@@ -30,9 +32,9 @@ data class ScanHistoryEntry(
             }
         }
 
-        fun add(prefs: SharedPreferences, barcode: String) {
+        fun add(prefs: SharedPreferences, barcode: String, productName: String? = null) {
             val entries = load(prefs).toMutableList()
-            entries.add(0, ScanHistoryEntry(barcode, System.currentTimeMillis()))
+            entries.add(0, ScanHistoryEntry(barcode, System.currentTimeMillis(), productName))
             save(prefs, entries.take(MAX_SIZE))
         }
 
@@ -46,6 +48,9 @@ data class ScanHistoryEntry(
                 val obj = JSONObject()
                 obj.put("b", e.barcode)
                 obj.put("t", e.timestamp)
+                if (e.productName != null) {
+                    obj.put("n", e.productName)
+                }
                 arr.put(obj)
             }
             prefs.edit().putString(PREF_KEY, arr.toString()).apply()

@@ -23,6 +23,7 @@ import com.scanner.overlay.service.SewCalibrationService
 import com.scanner.overlay.sync.GithubDatabaseManager
 import com.scanner.overlay.update.AutoUpdateManager
 import com.scanner.overlay.update.UpdateInfo
+import com.scanner.overlay.update.UpdateNotifier
 import com.scanner.overlay.update.UpdateResult
 import com.scanner.overlay.util.reusableBottomToast
 import com.scanner.overlay.util.toastAtBottom
@@ -85,6 +86,7 @@ class SettingsViewModel @Inject constructor(
         private const val PREF_KEY_OPACITY = "panel_opacity"
         private const val PREF_KEY_PRODUCT_DB_VERSION = "product_db_version"
         private const val PREF_KEY_CHANGE_LOG = "change_log"
+        private const val PREF_KEY_SCAN_QR_CODE = "scan_qr_code"
     }
 
     private val _isFloatingButtonEnabled = MutableStateFlow(false)
@@ -108,6 +110,11 @@ class SettingsViewModel @Inject constructor(
         prefs.getBoolean(PREF_KEY_AUTO_IMPORT_SEW, false)
     )
     val autoImportSew: StateFlow<Boolean> = _autoImportSew.asStateFlow()
+
+    private val _scanQrCode = MutableStateFlow(
+        prefs.getBoolean(PREF_KEY_SCAN_QR_CODE, true)
+    )
+    val scanQrCode: StateFlow<Boolean> = _scanQrCode.asStateFlow()
 
     private val _panelEdge = MutableStateFlow(
         prefs.getString(PREF_KEY_PANEL_EDGE, "right") ?: "right"
@@ -222,6 +229,10 @@ class SettingsViewModel @Inject constructor(
         prefs.registerOnSharedPreferenceChangeListener(prefsListener)
         loadInstalledApps()
         _changeLog.value = loadChangeLog()
+        val pendingUpdate = UpdateNotifier.getPendingUpdate(prefs)
+        if (pendingUpdate != null) {
+            _updateState.value = UpdateUiState.Available(pendingUpdate)
+        }
     }
 
     private fun loadInstalledApps() {
@@ -323,6 +334,12 @@ class SettingsViewModel @Inject constructor(
         if (_autoImportSew.value == enabled) return
         _autoImportSew.value = enabled
         prefs.edit().putBoolean(PREF_KEY_AUTO_IMPORT_SEW, enabled).apply()
+    }
+
+    fun setScanQrCode(enabled: Boolean) {
+        if (_scanQrCode.value == enabled) return
+        _scanQrCode.value = enabled
+        prefs.edit().putBoolean(PREF_KEY_SCAN_QR_CODE, enabled).apply()
     }
 
     fun setPanelEdge(edge: String) {
@@ -532,8 +549,14 @@ class SettingsViewModel @Inject constructor(
         _updateState.value = UpdateUiState.Checking
         viewModelScope.launch {
             when (val result = AutoUpdateManager.checkForUpdate()) {
-                is UpdateResult.UpToDate -> _updateState.value = UpdateUiState.UpToDate
-                is UpdateResult.Available -> _updateState.value = UpdateUiState.Available(result.info)
+                is UpdateResult.UpToDate -> {
+                    UpdateNotifier.clearPendingUpdate(prefs)
+                    _updateState.value = UpdateUiState.UpToDate
+                }
+                is UpdateResult.Available -> {
+                    UpdateNotifier.savePendingUpdate(prefs, result.info)
+                    _updateState.value = UpdateUiState.Available(result.info)
+                }
                 is UpdateResult.Error -> _updateState.value = UpdateUiState.Error(result.message)
             }
         }
@@ -553,6 +576,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun resetUpdateState() {
+        UpdateNotifier.clearPendingUpdate(prefs)
         _updateState.value = UpdateUiState.Idle
     }
 

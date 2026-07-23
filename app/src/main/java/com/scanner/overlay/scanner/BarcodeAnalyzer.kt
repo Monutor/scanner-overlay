@@ -15,6 +15,7 @@ class BarcodeAnalyzer(
     private val maxCenterDistanceFraction: Float = 0.18f,
     private val cooldownMs: Long = 2000L,
     private val startupDelayMs: Long = 1500L,
+    private val scanQrCode: Boolean = true,
     private val executor: ScheduledExecutorService,
     private val onResult: (ScannerResult) -> Unit
 ) : ImageAnalysis.Analyzer {
@@ -22,7 +23,7 @@ class BarcodeAnalyzer(
     private val scanner = BarcodeScanning.getClient(
         BarcodeScannerOptions.Builder()
             .setBarcodeFormats(
-                Barcode.FORMAT_QR_CODE or
+                (if (scanQrCode) Barcode.FORMAT_QR_CODE else 0) or
                 Barcode.FORMAT_EAN_13 or
                 Barcode.FORMAT_EAN_8 or
                 Barcode.FORMAT_CODE_128 or

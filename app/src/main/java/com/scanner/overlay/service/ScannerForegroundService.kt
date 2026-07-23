@@ -15,6 +15,7 @@ import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import com.scanner.overlay.R
 import com.scanner.overlay.overlay.OverlayActivity
+import com.scanner.overlay.update.UpdateNotifier
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
@@ -66,6 +67,7 @@ class ScannerForegroundService : Service() {
         serviceInstance = this
         prefs.edit().putBoolean(PREF_KEY_SERVICE_RUNNING, true).apply()
         createNotificationChannel()
+        UpdateNotifier.check(this)
         floatingPanel = FloatingPanel(this, prefs)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(

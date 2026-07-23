@@ -43,10 +43,18 @@ class OverlayViewModel @Inject constructor(
         timeoutJob?.cancel()
     }
 
-    fun onBarcodeDetected(result: ScannerResult.Success) {
+    fun onBarcodeDetected(
+        result: ScannerResult.Success,
+        productName: String? = null,
+        articleCode: String? = null
+    ) {
         timeoutJob?.cancel()
         _barcode.value = result.barcode
-        _state.value = OverlayState.Success(result.barcode)
+        _state.value = OverlayState.Success(
+            barcode = result.barcode,
+            productName = productName,
+            articleCode = articleCode
+        )
     }
 
     fun onCameraError() {
@@ -79,7 +87,11 @@ class OverlayViewModel @Inject constructor(
 
     sealed interface OverlayState {
         data object Scanning : OverlayState
-        data class Success(val barcode: String) : OverlayState
+        data class Success(
+        val barcode: String,
+        val productName: String? = null,
+        val articleCode: String? = null
+    ) : OverlayState
         data object Error : OverlayState
     }
 }
