@@ -14,7 +14,6 @@ import com.scanner.overlay.BuildConfig
 import com.scanner.overlay.accessibility.ScannerAccessibilityService
 import com.scanner.overlay.scanner.ArticleBarcodeDatabase
 import com.scanner.overlay.scanner.BarcodeDatabase
-import com.scanner.overlay.scanner.ProductImporter
 import com.scanner.overlay.scanner.ProductItem
 import com.scanner.overlay.scanner.ScanHistoryEntry
 import com.scanner.overlay.calibration.SewCalibration
@@ -48,7 +47,6 @@ sealed interface UpdateUiState {
 
 sealed interface DbManagerState {
     data object Idle : DbManagerState
-    data object Importing : DbManagerState
     data object Checking : DbManagerState
     data class Applied(val count: Int, val source: String, val products: List<ProductItem> = emptyList()) : DbManagerState
     data class Error(val message: String) : DbManagerState
@@ -578,30 +576,6 @@ class SettingsViewModel @Inject constructor(
     fun resetUpdateState() {
         UpdateNotifier.clearPendingUpdate(prefs)
         _updateState.value = UpdateUiState.Idle
-    }
-
-    fun importProductFile(context: Context, uri: android.net.Uri, fileName: String) {
-        if (_dbManagerState.value !is DbManagerState.Idle) return
-        _dbManagerState.value = DbManagerState.Importing
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val report = ProductImporter.import(context, uri, fileName)
-                if (report.count == 0) {
-                    val msg = if (report.errors.isNotEmpty()) report.errors.joinToString("\n") else "Нет новых товаров"
-                    withContext(Dispatchers.Main) { _dbManagerState.value = DbManagerState.Error(msg) }
-                    return@launch
-                }
-                productDbVersion = (productDbVersion + 1).coerceAtLeast(1)
-                saveChangeLog(ChangeLogEntry(report.count, "импорт", System.currentTimeMillis()))
-                withContext(Dispatchers.Main) {
-                    _dbManagerState.value = DbManagerState.Applied(report.count, "импорт", report.samples)
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    _dbManagerState.value = DbManagerState.Error(e.message ?: "Ошибка импорта")
-                }
-            }
-        }
     }
 
     fun checkForProductUpdates() {
