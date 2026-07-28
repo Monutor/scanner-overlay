@@ -666,10 +666,10 @@ class SettingsViewModel @Inject constructor(
         _viewProducts.value = null
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val json = GithubDatabaseManager.downloadFile("barcode-products.json")
+                val json = GithubDatabaseManager.downloadExternalDbJson()
                 if (json != null && json != "[]") {
                     ArticleBarcodeDatabase.reset()
-                    ArticleBarcodeDatabase.loadFromJson(json)
+                    ArticleBarcodeDatabase.loadFromExternalJson(json)
                     ArticleBarcodeDatabase.saveToCache(app)
                     withContext(Dispatchers.Main) {
                         _viewProducts.value = ArticleBarcodeDatabase.getAllItems()
