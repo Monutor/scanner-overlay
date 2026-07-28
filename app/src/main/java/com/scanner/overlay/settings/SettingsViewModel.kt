@@ -609,29 +609,39 @@ class SettingsViewModel @Inject constructor(
         _dbManagerState.value = DbManagerState.Checking
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val remoteVersion = GithubDatabaseManager.getDbVersion()
-                if (remoteVersion == null) {
+                val remoteSha = GithubDatabaseManager.getExternalDbSha()
+                if (remoteSha == null) {
                     withContext(Dispatchers.Main) {
-                        _dbManagerState.value = DbManagerState.Error("База ещё не опубликована. Выполните импорт, чтобы инициализировать.")
+                        _dbManagerState.value = DbManagerState.Error("Не удалось получить информацию о базе товаров")
                     }
                     return@launch
                 }
-                
-                val json = GithubDatabaseManager.downloadFile("barcode-products.json")
+
+                val prefs = app.getSharedPreferences("scanner_prefs", 0)
+                val localSha = prefs.getString("external_db_sha", "") ?: ""
+
+                if (remoteSha == localSha) {
+                    withContext(Dispatchers.Main) {
+                        _dbManagerState.value = DbManagerState.Idle
+                    }
+                    return@launch
+                }
+
+                val json = GithubDatabaseManager.downloadExternalDbJson()
                 if (json == null) {
                     withContext(Dispatchers.Main) {
                         _dbManagerState.value = DbManagerState.Error("Не удалось скачать базу товаров")
                     }
                     return@launch
                 }
-                
+
                 val existingCodes = ArticleBarcodeDatabase.getAllItems().map { it.articleCode }.toSet()
                 ArticleBarcodeDatabase.reset()
-                ArticleBarcodeDatabase.loadFromJson(json)
+                ArticleBarcodeDatabase.loadFromExternalJson(json)
                 ArticleBarcodeDatabase.saveToCache(app)
-                productDbVersion = remoteVersion.versionCode
+                prefs.edit().putString("external_db_sha", remoteSha).apply()
                 val newItems = ArticleBarcodeDatabase.getAllItems().filter { it.articleCode !in existingCodes }
-                
+
                 withContext(Dispatchers.Main) {
                     _dbManagerState.value = DbManagerState.Applied(newItems.size, "синхронизация", newItems.take(50))
                 }
