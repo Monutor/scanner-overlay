@@ -58,24 +58,6 @@ object ProductImporter {
             ArticleBarcodeDatabase.addItems(newItems)
             ArticleBarcodeDatabase.saveToCache(context as android.content.Context)
 
-            val csvJson = ArticleBarcodeDatabase.toJsonString()
-            val ok = kotlinx.coroutines.runBlocking { com.scanner.overlay.sync.GithubDatabaseManager.publishFile("barcode-products.json", csvJson, "sync: import + publish") }
-            
-            if (!ok) {
-                return ProductImportReport(
-                    count = newItems.size,
-                    errors = listOf("Импорт выполнен, но не удалось опубликовать на GitHub"),
-                    samples = newItems.take(50)
-                )
-            }
-
-            val versionJson = org.json.JSONObject().apply {
-                put("versionCode", (getProductDbVersion(context as android.content.Context) + 1).coerceAtLeast(1))
-                put("productsHash", csvJson.length.toString())
-                put("timestamp", System.currentTimeMillis())
-            }.toString(2)
-            kotlinx.coroutines.runBlocking { com.scanner.overlay.sync.GithubDatabaseManager.publishFile("db_version.json", versionJson, "sync: update db_version.json") }
-
             ProductImportReport(
                 count = newItems.size,
                 errors = if (existingCount > 0) listOf("$existingCount пропущено (уже есть)") else emptyList(),
