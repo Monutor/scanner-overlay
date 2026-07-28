@@ -296,11 +296,4 @@ object ProductImporter {
         val commaCount = lines.sumOf { line -> line.count { it == ',' } }
         return if (semicolonCount > commaCount) ';' else ','
     }
-
-    private fun getProductDbVersion(context: android.content.Context): Int {
-        return try {
-            val prefs = context.getSharedPreferences("scanner_prefs", 0)
-            prefs.getInt("product_db_version", 0)
-        } catch (_: Exception) { 0 }
-    }
 }
