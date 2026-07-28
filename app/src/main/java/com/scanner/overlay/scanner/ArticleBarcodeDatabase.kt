@@ -104,6 +104,26 @@ object ArticleBarcodeDatabase {
         parseJson(jsonText)
     }
 
+    fun loadFromExternalJson(jsonText: String) {
+        items.clear()
+        seenArticleCodes.clear()
+        try {
+            val array = JSONArray(jsonText)
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                val articleCode = optString(obj, "Код товара")
+                if (articleCode.isEmpty()) continue
+                seenArticleCodes.add(articleCode)
+                items.add(ProductItem(
+                    articleCode = articleCode,
+                    name = optString(obj, "Наименование"),
+                    barcode = optString(obj, "ШК товара")
+                ))
+            }
+            loaded = true
+        } catch (_: Exception) {}
+    }
+
     fun reset() {
         items.clear()
         seenArticleCodes.clear()
