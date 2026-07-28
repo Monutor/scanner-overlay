@@ -265,4 +265,27 @@ object GithubDatabaseManager {
             null
         }
     }
+
+    suspend fun getExternalDbSha(): String? = withContext(Dispatchers.IO) {
+        try {
+            val url = URL(productsApiUrl("db.json"))
+            val conn = url.openConnection() as HttpURLConnection
+            conn.requestMethod = "GET"
+            conn.setRequestProperty("Authorization", "Bearer $TOKEN")
+            conn.setRequestProperty("Accept", "application/vnd.github.v3+json")
+            conn.connectTimeout = 10000
+            conn.readTimeout = 10000
+            val code = conn.responseCode
+            if (code == 404) return@withContext null
+            if (code != 200) {
+                Log.w(TAG, "getExternalDbSha HTTP $code")
+                return@withContext null
+            }
+            val text = conn.inputStream.bufferedReader().use { it.readText() }
+            JSONObject(text).optString("sha").takeIf { it.isNotEmpty() }
+        } catch (e: Exception) {
+            Log.e(TAG, "getExternalDbSha failed", e)
+            null
+        }
+    }
 }
