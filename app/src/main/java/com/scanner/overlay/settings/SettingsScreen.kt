@@ -3,9 +3,6 @@ package com.scanner.overlay.settings
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.provider.OpenableColumns
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -32,7 +29,6 @@ import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
-import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.CloudDone
@@ -124,21 +120,7 @@ fun SettingsScreen(
     val scanQrCode by viewModel.scanQrCode.collectAsState()
     val scanHistory by viewModel.scanHistory.collectAsState()
 
-    val productImportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri != null) {
-            var fileName = "import.csv"
-            val cursor = context.contentResolver.query(uri, null, null, null, null)
-            cursor?.use { c ->
-                if (c.moveToFirst()) {
-                    val nameIdx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                    if (nameIdx >= 0) c.getString(nameIdx)?.let { fileName = it }
-                }
-            }
-            viewModel.importProductFile(context, uri, fileName)
-        }
-    }
+
 
     var showViewDatabaseDialog by remember { mutableStateOf(false) }
     val viewProducts by viewModel.viewProducts.collectAsState()
@@ -186,7 +168,6 @@ fun SettingsScreen(
                 ProductDbCard(
                     state = dbManagerState,
                     changeLog = changeLog,
-                    onImport = { productImportLauncher.launch(arrayOf("text/csv", "text/comma-separated-values", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")) },
                     onCheck = { viewModel.checkForProductUpdates() },
                     onViewProducts = {
                         viewModel.refreshViewProducts()
@@ -1709,7 +1690,6 @@ private fun HistoryRow(
 private fun ProductDbCard(
     state: DbManagerState,
     changeLog: List<ChangeLogEntry>,
-    onImport: () -> Unit,
     onCheck: () -> Unit,
     onViewProducts: () -> Unit,
     onClearLog: () -> Unit,
@@ -1831,7 +1811,7 @@ private fun ProductDbCard(
                         fontWeight = FontWeight.Medium
                     )
                     Text(
-                        text = "Импорт · синхронизация",
+                        text = "Синхронизация внешней базы",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1844,35 +1824,18 @@ private fun ProductDbCard(
                         Column(
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Row(
+                            OutlinedButton(
+                                onClick = onCheck,
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                contentPadding = PaddingValues(horizontal = 4.dp)
                             ) {
-                                Button(
-                                    onClick = onImport,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.UploadFile,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("Импорт", style = MaterialTheme.typography.labelLarge)
-                                }
-                                OutlinedButton(
-                                    onClick = onCheck,
-                                    modifier = Modifier.weight(1f),
-                                    contentPadding = PaddingValues(horizontal = 4.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.CloudDownload,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("Проверить", style = MaterialTheme.typography.labelLarge)
-                                }
+                                Icon(
+                                    imageVector = Icons.Default.CloudDownload,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text("Проверить", style = MaterialTheme.typography.labelLarge)
                             }
                             OutlinedButton(
                                 onClick = onViewProducts,
@@ -1943,17 +1906,6 @@ private fun ProductDbCard(
                                     )
                                 }
                             }
-                        }
-                    }
-                    is DbManagerState.Importing -> {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                            Spacer(Modifier.width(12.dp))
-                            Text("Импорт...")
                         }
                     }
                     is DbManagerState.Checking -> {
@@ -2055,7 +2007,7 @@ private fun ProductViewDialog(
                 }
                 products.isEmpty() -> {
                     Text(
-                        text = "База пуста. Выполните импорт или синхронизацию.",
+                        text = "База пуста. Нажмите «Проверить» для синхронизации.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 16.dp)
