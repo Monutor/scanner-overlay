@@ -102,12 +102,16 @@ class BarcodeAnalyzer(
                             return@addOnSuccessListener
                         }
 
-                        val value = centerBarcode.rawValue
+                        val rawValue = centerBarcode.rawValue
                             ?: centerBarcode.displayValue
                             ?: run {
                                 if (BuildConfig.DEBUG) android.util.Log.w("BarcodeAnalyzer", "barcode has no rawValue or displayValue")
                                 return@addOnSuccessListener
                             }
+                        val value = if (rawValue.startsWith("]C1")) {
+                            if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "stripped ]C1 prefix: $rawValue → ${rawValue.removePrefix("]C1")}")
+                            rawValue.removePrefix("]C1")
+                        } else rawValue
 
                         if (centerBarcode.format == Barcode.FORMAT_CODE_39 && value.length < 12) {
                             if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "rejected CODE_39 too short: $value (${value.length} chars)")

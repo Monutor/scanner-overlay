@@ -13,7 +13,10 @@ import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import android.view.inputmethod.EditorInfo
+import android.content.SharedPreferences
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 import java.lang.ref.WeakReference
 import com.scanner.overlay.BuildConfig
 import com.scanner.overlay.calibration.SewCalibration
@@ -32,15 +35,19 @@ class ScannerAccessibilityService : AccessibilityService() {
     private var pendingClipboardRestore: ClipData? = null
     private var lastInjectedText: String? = null
 
+    @Inject lateinit var prefs: SharedPreferences
+
     @Volatile private var sewInputInProgress: Boolean = false
     @Volatile private var sewResultDelivered: Boolean = false
     @Volatile private var pendingSewResult: SewInputCallback? = null
     @Volatile private var lastEffectiveTarget: String = ""
     private val watchdogHandler = Handler(Looper.getMainLooper())
     private val watchdogTimeoutMs: Long = 8_000L
+    private var _inputMode: String = "fast"
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        _inputMode = prefs.getString("sew_input_mode", "fast") ?: "fast"
         _instance = WeakReference(this)
     }
 
@@ -264,24 +271,40 @@ class ScannerAccessibilityService : AccessibilityService() {
         node.safeRecycle()
 
         mainHandler.postDelayed({
-            pasteFromContextMenu()
-            mainHandler.postDelayed({
-                val pastedField = findFocusedOrEditable()
-                if (pastedField != null) {
-                    pressEnter(pastedField)
-                    pastedField.safeRecycle()
+            node.safeRecycle()
+            val focused = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            if (focused != null && Build.VERSION.SDK_INT >= 28) {
+                try {
+                    val pasteOk = focused.performAction(
+                        AccessibilityNodeInfo.AccessibilityAction.ACTION_PASTE.id
+                    )
+                    if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "setText legacy: ACTION_PASTE ok=$pasteOk")
+                    if (!pasteOk) {
+                        focused.safeRecycle()
+                        pasteFromContextMenu()
+                    } else {
+                        mainHandler.postDelayed({
+                            val pastedField = findFocusedOrEditable()
+                            if (pastedField != null) {
+                                pressEnter(pastedField)
+                                pastedField.safeRecycle()
+                            }
+                            pendingClipboardRestore = null
+                            val currentClip = clipboard.primaryClip
+                            val stillOurs = currentClip != null &&
+                                currentClip.itemCount > 0 &&
+                                currentClip.getItemAt(0)?.text?.toString() == text
+                            if (stillOurs) original?.let { clipboard.setPrimaryClip(it) }
+                            else if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "setText fallback: clipboard changed by user, skip restore")
+                        }, 100L)
+                    }
+                } catch (_: Exception) {
+                    pasteFromContextMenu()
                 }
-                pendingClipboardRestore = null
-                val currentClip = clipboard.primaryClip
-                val stillOurs = currentClip != null &&
-                    currentClip.itemCount > 0 &&
-                    currentClip.getItemAt(0)?.text?.toString() == text
-                if (stillOurs) {
-                    original?.let { clipboard.setPrimaryClip(it) }
-                } else if (BuildConfig.DEBUG) {
-                    android.util.Log.d("ScannerAccessibility", "setText fallback: clipboard changed by user, skip restore")
-                }
-            }, 3000)
+            } else {
+                focused?.safeRecycle()
+                pasteFromContextMenu()
+            }
         }, 250)
     }
 
@@ -368,6 +391,13 @@ class ScannerAccessibilityService : AccessibilityService() {
         }, timeoutMs)
     }
 
+    fun setInputMode(mode: String) {
+        _inputMode = mode
+        prefs.edit().putString("sew_input_mode", mode).apply()
+    }
+
+    private val isFastMode: Boolean get() = _inputMode == "fast"
+
     companion object {
         private var _instance: WeakReference<ScannerAccessibilityService?> = WeakReference(null)
         val instance: ScannerAccessibilityService?
@@ -410,10 +440,11 @@ class ScannerAccessibilityService : AccessibilityService() {
             effectiveBarcode = if (testMode) "TEST_CALIBRATION" else barcode
         }
 
+        val startDelay = if (isFastMode) 0L else 500L
         mainHandler.postDelayed({
             if (!sewInputInProgress) return@postDelayed
             step1FindWindow(calibration, effectiveTarget, testMode, effectiveBarcode, onResult, onStep)
-        }, 500L)
+        }, startDelay)
     }
 
     private fun detectActiveSupportedBrowser(): String? {
@@ -533,10 +564,11 @@ class ScannerAccessibilityService : AccessibilityService() {
         if (immediate != null) {
             onStep?.invoke("SEW найден", true, null)
             armWatchdog(onResult)
+            val findDelay = if (isFastMode) 500L else 1000L
             mainHandler.postDelayed({
                 if (!sewInputInProgress) return@postDelayed
                 step2ClickOpenModal(calibration, testMode, effectiveBarcode, onResult, onStep)
-            }, 1000L)
+            }, findDelay)
             return
         }
         pollForTargetWindow(calibration, targetPackage, testMode, effectiveBarcode, onResult, onStep, attemptsLeft = 30)
@@ -637,10 +669,11 @@ class ScannerAccessibilityService : AccessibilityService() {
                 logWindowsSnapshot("step1.poll.found", targetPackage)
                 onStep?.invoke("SEW найден", true, null)
                 armWatchdog(onResult)
+                val pollFindDelay = if (isFastMode) 500L else 1000L
                 mainHandler.postDelayed({
                     if (!sewInputInProgress) return@postDelayed
                     step2ClickOpenModal(calibration, testMode, effectiveBarcode, onResult, onStep)
-                }, 1000L)
+                }, pollFindDelay)
             } else {
                 if (attemptsLeft == 30 || attemptsLeft % 10 == 0) {
                     logWindowsSnapshot("step1.poll.tick$attemptsLeft", targetPackage)
@@ -714,30 +747,61 @@ class ScannerAccessibilityService : AccessibilityService() {
             return
         }
         if (BuildConfig.DEBUG) logWindowsSnapshot("step2.afterTap.attempts${3 - attemptsLeft + 1}", lastEffectiveTarget)
+        armWatchdog(onResult)
+        pollForModalOrInput(calibration, testMode, effectiveBarcode, onResult, onStep, attemptsLeft, maxAttempts = if (isFastMode) 16 else 20)
+    }
+
+    private fun pollForModalOrInput(
+        calibration: SewCalibration,
+        testMode: Boolean,
+        effectiveBarcode: String,
+        onResult: SewInputCallback,
+        onStep: SewStepCallback?,
+        attemptsLeft: Int,
+        maxAttempts: Int
+    ) {
+        if (attemptsLeft <= 0) {
+            if (BuildConfig.DEBUG) logWindowsSnapshot("step2.noModalAfterPoll", lastEffectiveTarget)
+            val msg = "Модалка не открылась после $maxAttempts попыток (${calibration.openModal.x}, ${calibration.openModal.y})"
+            onStep?.invoke("Кнопка «Ручной ввод» доступна", false, msg)
+            releaseWatchdogAndFinish(onResult, false, msg)
+            return
+        }
+        // Poll for any new input field across all active windows
+        var foundInput: AccessibilityNodeInfo? = null
+        for (win in windows) {
+            if (!win.isActive) continue
+            val root = win.root ?: continue
+            val editable = findFirstEditable(root)
+            root.safeRecycle()
+            if (editable != null) {
+                foundInput = editable
+                break
+            }
+        }
+        val focusInput = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        if (focusInput != null && focusInput.isEditable) {
+            if (foundInput == null) foundInput = focusInput
+            else focusInput.safeRecycle()
+        } else {
+            focusInput?.safeRecycle()
+        }
+        if (BuildConfig.DEBUG) {
+            val pkg = foundInput?.packageName?.toString() ?: "<null>"
+            android.util.Log.d(
+                "ScannerAccessibility",
+                "[step2.poll] attemptsLeft=$attemptsLeft/$maxAttempts inputFound=${foundInput != null} pkg=$pkg"
+            )
+        }
+        if (foundInput != null) {
+            onStep?.invoke("Кнопка «Ручной ввод» доступна", true, null)
+            step3FindInput(calibration, testMode, effectiveBarcode, onResult, onStep)
+            return
+        }
         mainHandler.postDelayed({
-            armWatchdog(onResult)
-            val input = findInputFieldAcrossWindows()
-            if (BuildConfig.DEBUG) {
-                val found = input != null
-                val pkg = input?.packageName?.toString() ?: "<null>"
-                android.util.Log.d(
-                    "ScannerAccessibility",
-                    "[step2.findInput] found=$found pkg=$pkg attemptsLeft=$attemptsLeft"
-                )
-            }
-            if (input != null) {
-                input.safeRecycle()
-                onStep?.invoke("Кнопка «Ручной ввод» доступна", true, null)
-                step3FindInput(calibration, testMode, effectiveBarcode, onResult, onStep)
-            } else if (attemptsLeft > 1) {
-                tryOpenModal(calibration, point, testMode, effectiveBarcode, onResult, onStep, attemptsLeft - 1)
-            } else {
-                if (BuildConfig.DEBUG) logWindowsSnapshot("step2.noModalAfter3Taps", lastEffectiveTarget)
-                val msg = "Модалка не открылась после 3 тапов (${point.x}, ${point.y})"
-                onStep?.invoke("Кнопка «Ручной ввод» доступна", false, msg)
-                releaseWatchdogAndFinish(onResult, false, msg)
-            }
-        }, 1000L)
+            if (!sewInputInProgress) return@postDelayed
+            pollForModalOrInput(calibration, testMode, effectiveBarcode, onResult, onStep, attemptsLeft - 1, maxAttempts)
+        }, 50L)
     }
 
     private fun findInputFieldAcrossWindows(): AccessibilityNodeInfo? {
@@ -900,42 +964,9 @@ class ScannerAccessibilityService : AccessibilityService() {
         onResult: SewInputCallback,
         onStep: SewStepCallback?
     ) {
-        val keyboardOpen = windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
-        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "closeKeyboardAndClickConfirm: keyboardOpen=$keyboardOpen")
-        if (keyboardOpen) {
-            waitForKeyboardClosed(calibration, testMode, onResult, onStep, attemptsLeft = 5)
-        } else {
-            mainHandler.postDelayed({
-                if (!sewInputInProgress) return@postDelayed
-                step6ClickConfirm(calibration, testMode, onResult, onStep)
-            }, 100L)
-        }
-    }
-
-    private fun waitForKeyboardClosed(
-        calibration: SewCalibration,
-        testMode: Boolean,
-        onResult: SewInputCallback,
-        onStep: SewStepCallback?,
-        attemptsLeft: Int
-    ) {
-        if (attemptsLeft <= 0) {
-            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "waitForKeyboardClosed: gave up after retries, clicking confirm anyway")
-            mainHandler.postDelayed({
-                if (!sewInputInProgress) return@postDelayed
-                step6ClickConfirm(calibration, testMode, onResult, onStep)
-            }, 100L)
-            return
-        }
         mainHandler.postDelayed({
             if (!sewInputInProgress) return@postDelayed
-            val stillOpen = windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
-            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "waitForKeyboardClosed: stillOpen=$stillOpen attemptsLeft=$attemptsLeft")
-            if (!stillOpen) {
-                step6ClickConfirm(calibration, testMode, onResult, onStep)
-            } else {
-                waitForKeyboardClosed(calibration, testMode, onResult, onStep, attemptsLeft - 1)
-            }
+            step6ClickConfirm(calibration, testMode, onResult, onStep)
         }, 200L)
     }
 

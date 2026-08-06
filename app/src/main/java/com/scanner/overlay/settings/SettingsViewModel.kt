@@ -79,6 +79,7 @@ class SettingsViewModel @Inject constructor(
         const val PREF_KEY_AUTO_FOCUS_ENABLED = "auto_focus_enabled"
         private const val PREF_KEY_TTS_ENABLED = "tts_enabled"
         const val PREF_KEY_AUTO_IMPORT_SEW = "auto_import_sew"
+        const val PREF_KEY_SEW_INPUT_MODE = "sew_input_mode"
         private const val PREF_KEY_PANEL_EDGE = "panel_edge"
         private const val PREF_KEY_BTN_SIZE = "panel_btn_size"
         private const val PREF_KEY_OPACITY = "panel_opacity"
@@ -108,6 +109,11 @@ class SettingsViewModel @Inject constructor(
         prefs.getBoolean(PREF_KEY_AUTO_IMPORT_SEW, false)
     )
     val autoImportSew: StateFlow<Boolean> = _autoImportSew.asStateFlow()
+
+    private val _inputMode = MutableStateFlow(
+        prefs.getString(PREF_KEY_SEW_INPUT_MODE, "fast") ?: "fast"
+    )
+    val inputMode: StateFlow<String> = _inputMode.asStateFlow()
 
     private val _scanQrCode = MutableStateFlow(
         prefs.getBoolean(PREF_KEY_SCAN_QR_CODE, true)
@@ -332,6 +338,13 @@ class SettingsViewModel @Inject constructor(
         if (_autoImportSew.value == enabled) return
         _autoImportSew.value = enabled
         prefs.edit().putBoolean(PREF_KEY_AUTO_IMPORT_SEW, enabled).apply()
+    }
+
+    fun setInputMode(mode: String) {
+        if (_inputMode.value == mode) return
+        _inputMode.value = mode
+        prefs.edit().putString(PREF_KEY_SEW_INPUT_MODE, mode).apply()
+        ScannerAccessibilityService.instance?.setInputMode(mode)
     }
 
     fun setScanQrCode(enabled: Boolean) {

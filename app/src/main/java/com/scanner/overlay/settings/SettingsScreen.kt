@@ -114,6 +114,7 @@ fun SettingsScreen(
     val sewTestResult by viewModel.sewTestResult.collectAsState()
     val awaitingSewCalibration by viewModel.awaitingSewCalibration.collectAsState()
     val autoImportSew by viewModel.autoImportSew.collectAsState()
+    val inputMode by viewModel.inputMode.collectAsState()
     val tapToFocusEnabled by viewModel.tapToFocusEnabled.collectAsState()
     val autoFocusEnabled by viewModel.autoFocusEnabled.collectAsState()
     val isTtsEnabled by viewModel.isTtsEnabled.collectAsState()
@@ -244,7 +245,9 @@ fun SettingsScreen(
                     testResult = sewTestResult,
                     awaiting = awaitingSewCalibration,
                     autoImportSew = autoImportSew,
+                    inputMode = inputMode,
                     onAutoImportSewToggle = { viewModel.setAutoImportSew(it) },
+                    onInputModeChange = { viewModel.setInputMode(it) },
                     installedApps = installedApps,
                     currentPackageLabel = installedApps.firstOrNull { it.packageName == sewCalibration.targetPackage }?.label,
                     onPickApp = { viewModel.setSewTargetPackage(it) },
@@ -954,6 +957,8 @@ private fun SewCalibrationCard(
     awaiting: Boolean,
     autoImportSew: Boolean = false,
     onAutoImportSewToggle: (Boolean) -> Unit = {},
+    inputMode: String = "fast",
+    onInputModeChange: (String) -> Unit = {},
     installedApps: List<AppInfo>,
     currentPackageLabel: String?,
     onPickApp: (String) -> Unit,
@@ -1019,12 +1024,41 @@ private fun SewCalibrationCard(
                 FloatingToggleRow(
                     color = BlueFab,
                     icon = Icons.Default.PlayArrow,
-                    title = "Быстрый ввод в SEW",
+                    title = "Авто-ввод в SEW",
                     subtitle = "При скане сразу вводить штрихкод без экрана успеха",
                     checked = autoImportSew,
                     enabled = true,
                     onCheckedChange = onAutoImportSewToggle
                 )
+            }
+
+            if (calibration.isCalibrated && !awaiting) {
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    Text(
+                        text = "Скорость ввода",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    val modeOptions = listOf("fast" to "Быстрый", "slow" to "Медленный")
+                    val selectedIndex = modeOptions.indexOfFirst { it.first == inputMode }.coerceAtLeast(0)
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        modeOptions.forEachIndexed { index, (value, label) ->
+                            SegmentedButton(
+                                selected = index == selectedIndex,
+                                onClick = { onInputModeChange(value) },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = modeOptions.size
+                                ),
+                                icon = {}
+                            ) {
+                                Text(label, style = MaterialTheme.typography.labelLarge)
+                            }
+                        }
+                    }
+                }
             }
 
             if (!awaiting) {
