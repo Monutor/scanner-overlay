@@ -144,8 +144,8 @@ class ScannerForegroundService : Service() {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(scanPendingIntent)
             .addAction(
-                R.drawable.ic_scan,
-                getString(R.string.scan_action),
+                android.R.drawable.ic_menu_close_clear_cancel,
+                "Остановить",
                 stopPendingIntent
             )
             .build()

@@ -37,7 +37,7 @@ class ScannerAccessibilityService : AccessibilityService() {
     @Volatile private var pendingSewResult: SewInputCallback? = null
     @Volatile private var lastEffectiveTarget: String = ""
     private val watchdogHandler = Handler(Looper.getMainLooper())
-    private val watchdogTimeoutMs: Long = 6_000L
+    private val watchdogTimeoutMs: Long = 8_000L
 
     override fun onServiceConnected() {
         super.onServiceConnected()

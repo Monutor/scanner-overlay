@@ -1,10 +1,12 @@
 package com.scanner.overlay.scanner
 
 import android.content.Context
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 
 object ArticleBarcodeDatabase {
+    private const val TAG = "ArticleBarcodeDatabase"
 
     private const val LOCAL_DB_FILE = "barcode-products-db.json"
 
@@ -27,7 +29,9 @@ object ArticleBarcodeDatabase {
     fun saveToCache(context: Context) {
         try {
             context.filesDir.resolve(LOCAL_DB_FILE).writeText(toJsonString())
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.e(TAG, "saveToCache failed", e)
+        }
     }
 
     private fun loadFromCache(context: Context) {
@@ -36,7 +40,9 @@ object ArticleBarcodeDatabase {
             if (file.exists()) {
                 parseJson(file.readText())
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.e(TAG, "loadFromCache failed", e)
+        }
     }
 
     private fun loadFromAssets(context: Context) {
@@ -44,7 +50,9 @@ object ArticleBarcodeDatabase {
             val jsonText = context.assets.open("barcode-products.json").bufferedReader().readText()
             parseJson(jsonText)
             loaded = true
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.e(TAG, "loadFromAssets failed", e)
+        }
     }
 
     private fun parseJson(jsonText: String) {
@@ -64,7 +72,9 @@ object ArticleBarcodeDatabase {
                 ))
             }
             loaded = true
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.e(TAG, "parseJson failed", e)
+        }
     }
 
     fun addItems(newItems: List<ProductItem>) {
@@ -121,7 +131,9 @@ object ArticleBarcodeDatabase {
                 ))
             }
             loaded = true
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.e(TAG, "loadFromExternalJson failed", e)
+        }
     }
 
     fun reset() {

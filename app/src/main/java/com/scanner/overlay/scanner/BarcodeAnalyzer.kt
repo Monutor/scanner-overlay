@@ -40,6 +40,7 @@ class BarcodeAnalyzer(
 
     private var lastScannedCode: String? = null
     private var lastScanTime = 0L
+    private val scanLock = Any()
     private val scannedCodes = java.util.concurrent.ConcurrentLinkedQueue<String>()
     private val maxCachedCodes = 50
 
@@ -132,17 +133,21 @@ class BarcodeAnalyzer(
 
     private fun handleBarcode(value: String, format: Int) {
         val now = System.currentTimeMillis()
-        if (value == lastScannedCode && now - lastScanTime < cooldownMs) {
-            if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "rejected cooldown: $value")
-            return
+        synchronized(scanLock) {
+            if (value == lastScannedCode && now - lastScanTime < cooldownMs) {
+                if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "rejected cooldown: $value")
+                return
+            }
         }
         if (scannedCodes.contains(value)) {
             if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "rejected duplicate: $value")
             return
         }
         addScannedCode(value)
-        lastScannedCode = value
-        lastScanTime = now
+        synchronized(scanLock) {
+            lastScannedCode = value
+            lastScanTime = now
+        }
         if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "SUCCESS: $value")
         onResult(ScannerResult.Success(value, format))
     }
@@ -155,7 +160,7 @@ class BarcodeAnalyzer(
     }
 
     fun reset() {
-        executor.execute {
+        synchronized(scanLock) {
             lastScannedCode = null
         }
     }
