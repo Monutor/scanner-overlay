@@ -1,5 +1,5 @@
 # Use system JAVA_HOME/ANDROID_HOME if set, otherwise use defaults
-if (-not $env:JAVA_HOME) { $env:JAVA_HOME = "G:\AndroidStudio\jbr" }
+if (-not $env:JAVA_HOME) { $env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.20.8-hotspot" }
 if (-not $env:ANDROID_HOME) { $env:ANDROID_HOME = "G:\AndroidStudioSDK" }
 
 $ADB_PATH = Join-Path $env:ANDROID_HOME "platform-tools\adb.exe"
