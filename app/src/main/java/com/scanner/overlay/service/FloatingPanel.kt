@@ -1,24 +1,36 @@
 package com.scanner.overlay.service
 
-import android.animation.ValueAnimator
-import android.animation.AnimatorListenerAdapter
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
-import android.graphics.Color
 import android.graphics.PixelFormat
-import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.view.Gravity
-import android.view.MotionEvent
-import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
-import android.view.animation.PathInterpolator
-import android.widget.FrameLayout
-import android.widget.ImageView
-import android.widget.LinearLayout
-import android.widget.TextView
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.filled.QrCode
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.border
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.scanner.overlay.R
 import com.scanner.overlay.overlay.OverlayActivity
 import com.scanner.overlay.settings.ArticleBarcodeActivity
@@ -42,37 +54,50 @@ class FloatingPanel(
         private const val PAD_DP = 20
         private const val GAP_DP = 12
         private const val EDGE_MARGIN_DP = 0
-        private const val ANIM_MS = 350L
     }
 
     private var edge: Edge = Edge.RIGHT
-    private var isOpen = true
-    private var isAnimating = false
-    private var lastTapTime = 0L
-    private var dragStartX = 0
-    private var dragStartY = 0
-    private var dragTouchX = 0f
-    private var dragTouchY = 0f
-    private var isDragging = false
-    private var rootView: View? = null
-    private var params: WindowManager.LayoutParams? = null
-    private var btnSizeDp = 56
-    private var opacity = 1f
+    private var isOpen by mutableStateOf(prefs.getBoolean(PREF_OPEN, true))
+    private var panelY by mutableStateOf(prefs.getInt(PREF_Y, defaultY()).toFloat())
+    private var btnSizeDp = prefs.getInt(PREF_BTN_SIZE, 56).dp
+    private var opacity = prefs.getFloat(PREF_OPACITY, 1f)
 
     private val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    private val density: Float get() = context.resources.displayMetrics.density
 
-    private val bodyWidthDp: Int get() = btnSizeDp + PAD_DP * 2
+    private val bodyWidthDp: Int
+        get() {
+            val d = btnSizeDp.value.toDouble()
+            return (d + PAD_DP * 2).toInt()
+        }
+
+    private var composeView: ComposeView? = null
+    private var params: WindowManager.LayoutParams? = null
 
     fun show() {
-        if (rootView != null) return
+        if (composeView != null) return
         isOpen = prefs.getBoolean(PREF_OPEN, true)
-        btnSizeDp = prefs.getInt(PREF_BTN_SIZE, 56)
+        panelY = prefs.getInt(PREF_Y, defaultY()).toFloat()
+        btnSizeDp = prefs.getInt(PREF_BTN_SIZE, 56).dp
         opacity = prefs.getFloat(PREF_OPACITY, 1f)
-        val savedEdge = prefs.getString(PREF_EDGE, "right") ?: "right"
+        val savedEdge: String = prefs.getString(PREF_EDGE, "right") ?: "right"
         edge = if (savedEdge == "left") Edge.LEFT else Edge.RIGHT
-        val sy = prefs.getInt(PREF_Y, defaultY())
-        val root = buildPanel()
-        val totalW = dp(bodyWidthDp + TAB_W_DP)
+
+        val root = ComposeView(context).apply {
+            setId(resources.getIdentifier("floating_panel_root", null, context.packageName))
+            setContent {
+                ScannerOverlayTheme {
+                    PanelContent(
+                        isOpen = isOpen,
+                        onToggle = { toggle() },
+                        edge = edge,
+                        btnSizeDp = btnSizeDp
+                    )
+                }
+            }
+        }
+
+        val totalW: Int = bodyWidthDp + dp(TAB_W_DP)
         params = WindowManager.LayoutParams(
             totalW, ViewGroup.LayoutParams.WRAP_CONTENT,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
@@ -83,217 +108,47 @@ class FloatingPanel(
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             x = if (isOpen) calcOpenX() else calcClosedX()
-            y = sy
+            y = panelY.toInt().coerceIn(0, maxY())
         }
-        rootView = root
+
         root.alpha = opacity
+        composeView = root
         try {
             wm.addView(root, params!!)
         } catch (_: Exception) {
-            rootView = null
+            composeView = null
             params = null
         }
     }
 
     fun hide() {
-        isAnimating = false
-        rootView?.let {
-            try {
-                wm.removeView(it)
-            } catch (_: Exception) {
-            }
+        composeView?.let {
+            try { wm.removeView(it) } catch (_: Exception) {}
         }
-        rootView = null
+        composeView = null
         params = null
     }
 
-    private fun buildPanel(): View {
-        val root = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = ViewGroup.LayoutParams(
-                dp(bodyWidthDp + TAB_W_DP),
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        }
-        val tab = buildTab()
-        val body = buildPanelBody()
-        if (edge == Edge.RIGHT) {
-            root.addView(tab)
-            root.addView(body)
-        } else {
-            root.addView(body)
-            root.addView(tab)
-        }
-        root.setOnTouchListener { _, event -> onPanelTouch(event) }
-        return root
-    }
-
-    private fun buildTab(): View {
-        val r = dp(20).toFloat()
-        val tab = LinearLayout(context).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                dp(TAB_W_DP), dp(TAB_H_DP)
-            ).apply {
-                gravity = Gravity.CENTER_VERTICAL
-                if (edge == Edge.RIGHT) marginEnd = -dp(1) else marginStart = -dp(1)
-            }
-            gravity = Gravity.CENTER
-            background = GradientDrawable().apply {
-                setShape(GradientDrawable.RECTANGLE)
-                setColor(Color.parseColor("#F21E1E3C"))
-                setStroke(dp(1), Color.parseColor("#14FFFFFF"))
-                cornerRadii = if (edge == Edge.RIGHT)
-                    floatArrayOf(r, r, 0f, 0f, 0f, 0f, r, r)
-                else
-                    floatArrayOf(0f, 0f, r, r, r, r, 0f, 0f)
-            }
-        }
-        val arrow = TextView(context).apply {
-            text = if (isOpen == (edge == Edge.LEFT)) "\u25B6" else "\u25C0"
-            textSize = 16f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-        }
-        tab.addView(arrow, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        ))
-        tab.setOnClickListener { toggle() }
-        return tab
-    }
-
-    private fun buildPanelBody(): LinearLayout {
-        val r = dp(20).toFloat()
-        val body = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                dp(bodyWidthDp), ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            setPadding(dp(PAD_DP), dp(PAD_DP), dp(PAD_DP), dp(PAD_DP))
-            background = GradientDrawable().apply {
-                setShape(GradientDrawable.RECTANGLE)
-                setColor(Color.parseColor("#F21E1E3C"))
-                setStroke(dp(1), Color.parseColor("#14FFFFFF"))
-                cornerRadii = if (edge == Edge.RIGHT)
-                    floatArrayOf(r, r, 0f, 0f, 0f, 0f, r, r)
-                else
-                    floatArrayOf(0f, 0f, r, r, r, r, 0f, 0f)
-            }
-        }
-
-        data class Btn(val icon: Int, val color: String, val label: String)
-        val buttons = listOf(
-            Btn(R.drawable.ic_scanner, "#1976D2", "Сканер"),
-            Btn(R.drawable.ic_shelf, "#FB8C00", "Полка"),
-            Btn(R.drawable.ic_article, "#388E3C", "Артикул"),
-            Btn(R.drawable.ic_article_barcode, "#7B1FA2", "ШК")
-        )
-
-        buttons.forEachIndexed { i, btn ->
-            val btnLayout = LinearLayout(context).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER_HORIZONTAL
-            }
-
-            val img = ImageView(context).apply {
-                layoutParams = LinearLayout.LayoutParams(dp(btnSizeDp), dp(btnSizeDp))
-                scaleType = ImageView.ScaleType.CENTER_INSIDE
-                setImageResource(btn.icon)
-                setColorFilter(Color.WHITE)
-                setPadding(dp(8), dp(8), dp(8), dp(8))
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    elevation = 6f
-                }
-                background = GradientDrawable().apply {
-                    setShape(GradientDrawable.OVAL)
-                    setColor(Color.parseColor(btn.color))
-                }
-                setOnClickListener { launch(i) }
-            }
-            btnLayout.addView(img)
-
-            val lbl = TextView(context).apply {
-                text = btn.label
-                textSize = 7f
-                gravity = Gravity.CENTER_HORIZONTAL
-                setTextColor(Color.parseColor("#999999"))
-            }
-            btnLayout.addView(lbl)
-
-            body.addView(btnLayout)
-            if (i < buttons.size - 1) {
-                val spacer = View(context)
-                spacer.layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, dp(GAP_DP)
-                )
-                body.addView(spacer)
-            }
-        }
-
-        return body
-    }
-
     private fun toggle() {
-        if (isAnimating) return
         isOpen = !isOpen
         prefs.edit().putBoolean(PREF_OPEN, isOpen).apply()
-        val startX = params!!.x
-        val endX = if (isOpen) calcOpenX() else calcClosedX()
-        isAnimating = true
-        ValueAnimator.ofFloat(startX.toFloat(), endX.toFloat()).apply {
-            duration = ANIM_MS
-            interpolator = PathInterpolator(0.22f, 1f, 0.36f, 1f)
+        val startX = params!!.x.toFloat()
+        val endX = if (isOpen) calcOpenX().toFloat() else calcClosedX().toFloat()
+        val root = composeView ?: return
+        var anim: android.animation.ValueAnimator? = null
+        android.animation.ValueAnimator.ofFloat(startX, endX).apply {
+            duration = 350L
+            interpolator = android.view.animation.PathInterpolator(0.22f, 1f, 0.36f, 1f)
             addUpdateListener { a ->
                 params!!.x = (a.animatedValue as Float).toInt()
-                wm.updateViewLayout(rootView!!, params!!)
+                try { wm.updateViewLayout(root, params!!) } catch (_: Exception) {}
             }
-            addListener(object : AnimatorListenerAdapter() {
+            addListener(object : android.animation.AnimatorListenerAdapter() {
                 override fun onAnimationEnd(a: android.animation.Animator) {
-                    isAnimating = false
-                    updateArrow()
+                    anim = null
                 }
             })
         }.start()
-    }
-
-    private fun onPanelTouch(event: MotionEvent): Boolean {
-        val p = params ?: return false
-        when (event.action) {
-            MotionEvent.ACTION_DOWN -> {
-                dragStartX = p.x
-                dragStartY = p.y
-                dragTouchX = event.rawX
-                dragTouchY = event.rawY
-                isDragging = false
-            }
-            MotionEvent.ACTION_MOVE -> {
-                val dy = (event.rawY - dragTouchY).toInt()
-                if (!isDragging) isDragging = Math.abs(dy) > 10
-                if (isDragging) {
-                    p.y = (dragStartY + dy).coerceIn(0, maxY())
-                    try {
-                        wm.updateViewLayout(rootView!!, p)
-                    } catch (_: Exception) {
-                    }
-                }
-            }
-            MotionEvent.ACTION_UP -> {
-                if (isDragging) {
-                    prefs.edit().putInt(PREF_Y, p.y).apply()
-                } else {
-                    toggle()
-                }
-            }
-        }
-        return true
-    }
-
-    private fun updateArrow() {
-        val root = rootView as? LinearLayout ?: return
-        val tabIndex = if (edge == Edge.RIGHT) 0 else 1
-        if (root.childCount <= tabIndex) return
-        val tab = root.getChildAt(tabIndex) as? LinearLayout ?: return
-        (tab.getChildAt(0) as? TextView)?.text = if (isOpen == (edge == Edge.LEFT)) "\u25B6" else "\u25C0"
     }
 
     fun setEdge(newEdge: Edge) {
@@ -303,7 +158,7 @@ class FloatingPanel(
     }
 
     fun setBtnSize(size: Int) {
-        btnSizeDp = size
+        btnSizeDp = size.dp
         prefs.edit().putInt(PREF_BTN_SIZE, size).apply()
         rebuild()
     }
@@ -311,47 +166,153 @@ class FloatingPanel(
     fun setOpacity(value: Float) {
         opacity = value
         prefs.edit().putFloat(PREF_OPACITY, value).apply()
-        rootView?.alpha = value
+        composeView?.alpha = value
     }
 
     fun getEdge(): Edge = edge
 
     private fun rebuild() {
-        rootView?.let { wm.removeView(it) }
-        rootView = null
+        composeView?.let { wm.removeView(it) }
+        composeView = null
         params = null
         show()
     }
 
     private fun launch(idx: Int) {
-        val now = System.currentTimeMillis()
-        if (now - lastTapTime < 500) return
-        lastTapTime = now
         val intent = when (idx) {
             0 -> Intent(context, OverlayActivity::class.java)
             1 -> Intent(context, ShelfPickerActivity::class.java)
             2 -> Intent(context, ArticleLookupActivity::class.java)
             3 -> Intent(context, ArticleBarcodeActivity::class.java)
             else -> return
-        }.apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-        }
+        }.apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }
         context.startActivity(intent)
     }
 
     private fun calcOpenX(): Int = when (edge) {
-        Edge.RIGHT -> scrW - dp(bodyWidthDp + TAB_W_DP) - dp(EDGE_MARGIN_DP)
+        Edge.RIGHT -> scrW - bodyWidthDp - dp(TAB_W_DP) - dp(EDGE_MARGIN_DP)
         Edge.LEFT -> dp(EDGE_MARGIN_DP)
     }
 
     private fun calcClosedX(): Int = when (edge) {
         Edge.RIGHT -> scrW - dp(TAB_W_DP) - dp(EDGE_MARGIN_DP)
-        Edge.LEFT -> -dp(bodyWidthDp) + dp(EDGE_MARGIN_DP)
+        Edge.LEFT -> -bodyWidthDp + dp(EDGE_MARGIN_DP)
     }
 
     private fun dp(v: Number): Int = (v.toFloat() * density).toInt()
     private val scrW: Int get() = context.resources.displayMetrics.widthPixels
-    private val density: Float get() = context.resources.displayMetrics.density
     private fun defaultY(): Int = context.resources.displayMetrics.heightPixels / 3
     private fun maxY(): Int = context.resources.displayMetrics.heightPixels - dp(TAB_H_DP)
 }
+
+// ─── Compose UI ──────────────────────────────────────────────────────────────
+
+private val PanelBg = Color(0xF21E1E3C)
+private val PanelStroke = Color(0x14FFFFFF)
+private val LabelColor = Color(0x999999)
+
+private data class PanelBtn(val icon: ImageVector, val color: Color, val label: String)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ScannerOverlayTheme(content: @Composable () -> Unit) {
+    MaterialTheme(content = content)
+}
+
+@Composable
+private fun PanelContent(
+    isOpen: Boolean,
+    onToggle: () -> Unit,
+    edge: FloatingPanel.Edge,
+    btnSizeDp: androidx.compose.ui.unit.Dp
+) {
+    val tabW = 32.dp
+    val tabH = 72.dp
+    val pad = 20.dp
+    val gap = 12.dp
+    val radius = 20.dp
+
+    val bodyOffsetX = animateDpAsState(
+        targetValue = if (isOpen) 0.dp else -(btnSizeDp + pad * 2),
+        label = "panelBodyOffset"
+    )
+
+    val buttons = listOf(
+        PanelBtn(Icons.Filled.ArrowForward, Color(0xFF1976D2), "Сканер"),
+        PanelBtn(Icons.Filled.ArrowBack, Color(0xFFFB8C00), "Полка"),
+        PanelBtn(Icons.Filled.Search, Color(0xFF388E3C), "Артикул"),
+        PanelBtn(Icons.Filled.QrCode, Color(0xFF7B1FA2), "ШК")
+    )
+
+    Row(modifier = Modifier.fillMaxWidth()) {
+        // Tab (arrow)
+        val tabCornerRadii = when (edge) {
+            FloatingPanel.Edge.RIGHT -> RoundedCornerShape(topStart = radius, bottomStart = radius)
+            FloatingPanel.Edge.LEFT -> RoundedCornerShape(topEnd = radius, bottomEnd = radius)
+        }
+        Box(
+            modifier = Modifier
+                .width(tabW)
+                .height(tabH)
+                .clip(tabCornerRadii)
+                .background(PanelBg)
+                .border(0.5.dp, PanelStroke, tabCornerRadii)
+                .clickable { onToggle() },
+            contentAlignment = Alignment.Center
+        ) {
+            val arrow = if (isOpen == (edge == FloatingPanel.Edge.LEFT)) Icons.Filled.ArrowForward else Icons.Filled.ArrowBack
+            Icon(arrow, contentDescription = "Toggle", tint = Color.White, modifier = Modifier.size(18.dp))
+        }
+
+        // Body
+        val bodyCornerRadii = when (edge) {
+            FloatingPanel.Edge.RIGHT -> RoundedCornerShape(topEnd = radius, bottomEnd = radius)
+            FloatingPanel.Edge.LEFT -> RoundedCornerShape(topStart = radius, bottomStart = radius)
+        }
+        Box(modifier = Modifier.offset(x = bodyOffsetX.value)) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .width(btnSizeDp + pad * 2)
+                    .padding(pad)
+                    .clip(bodyCornerRadii)
+                    .background(PanelBg)
+                    .border(0.5.dp, PanelStroke, bodyCornerRadii)
+            ) {
+                buttons.forEachIndexed { i, btn ->
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(btnSizeDp)
+                                .clip(CircleShape)
+                                .background(btn.color),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                btn.icon,
+                                contentDescription = btn.label,
+                                tint = Color.White,
+                                modifier = Modifier.size(btnSizeDp * 0.5f)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            btn.label,
+                            fontSize = 7.sp,
+                            color = LabelColor,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                    if (i < buttons.size - 1) {
+                        Spacer(modifier = Modifier.height(gap))
+                    }
+                }
+            }
+        }
+    }
+}
+
+
