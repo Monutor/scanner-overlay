@@ -748,7 +748,8 @@ class ScannerAccessibilityService : AccessibilityService() {
         }
         if (BuildConfig.DEBUG) logWindowsSnapshot("step2.afterTap.attempts${3 - attemptsLeft + 1}", lastEffectiveTarget)
         armWatchdog(onResult)
-        pollForModalOrInput(calibration, testMode, effectiveBarcode, onResult, onStep, attemptsLeft, maxAttempts = if (isFastMode) 16 else 20)
+        val pollMax = if (isFastMode) 16 else 20
+        pollForModalOrInput(calibration, testMode, effectiveBarcode, onResult, onStep, pollAttemptsLeft = pollMax, maxAttempts = pollMax)
     }
 
     private fun pollForModalOrInput(
@@ -757,51 +758,72 @@ class ScannerAccessibilityService : AccessibilityService() {
         effectiveBarcode: String,
         onResult: SewInputCallback,
         onStep: SewStepCallback?,
-        attemptsLeft: Int,
+        pollAttemptsLeft: Int,
         maxAttempts: Int
     ) {
-        if (attemptsLeft <= 0) {
+        if (pollAttemptsLeft <= 0) {
             if (BuildConfig.DEBUG) logWindowsSnapshot("step2.noModalAfterPoll", lastEffectiveTarget)
             val msg = "Модалка не открылась после $maxAttempts попыток (${calibration.openModal.x}, ${calibration.openModal.y})"
             onStep?.invoke("Кнопка «Ручной ввод» доступна", false, msg)
             releaseWatchdogAndFinish(onResult, false, msg)
             return
         }
-        // Poll for any new input field across all active windows
-        var foundInput: AccessibilityNodeInfo? = null
-        for (win in windows) {
-            if (!win.isActive) continue
-            val root = win.root ?: continue
-            val editable = findFirstEditable(root)
-            root.safeRecycle()
-            if (editable != null) {
-                foundInput = editable
-                break
-            }
+        // First attempt: wait for modal to fully open before searching
+        if (pollAttemptsLeft == maxAttempts) {
+            mainHandler.postDelayed({
+                if (!sewInputInProgress) return@postDelayed
+                pollForModalOrInput(calibration, testMode, effectiveBarcode, onResult, onStep, pollAttemptsLeft - 1, maxAttempts)
+            }, if (isFastMode) 600L else 1000L)
+            return
         }
-        val focusInput = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-        if (focusInput != null && focusInput.isEditable) {
-            if (foundInput == null) foundInput = focusInput
-            else focusInput.safeRecycle()
-        } else {
-            focusInput?.safeRecycle()
-        }
+        // Poll for input field — prefer placeholder match, then focus, then any editable in SEW window
+        val foundInput = findModalInputField()
         if (BuildConfig.DEBUG) {
             val pkg = foundInput?.packageName?.toString() ?: "<null>"
             android.util.Log.d(
                 "ScannerAccessibility",
-                "[step2.poll] attemptsLeft=$attemptsLeft/$maxAttempts inputFound=${foundInput != null} pkg=$pkg"
+                "[step2.poll] pollAttemptsLeft=$pollAttemptsLeft/$maxAttempts inputFound=${foundInput != null} pkg=$pkg"
             )
         }
         if (foundInput != null) {
             onStep?.invoke("Кнопка «Ручной ввод» доступна", true, null)
-            step3FindInput(calibration, testMode, effectiveBarcode, onResult, onStep)
+            step3FindInput(foundInput, effectiveBarcode, calibration, testMode, onResult, onStep)
             return
         }
         mainHandler.postDelayed({
             if (!sewInputInProgress) return@postDelayed
-            pollForModalOrInput(calibration, testMode, effectiveBarcode, onResult, onStep, attemptsLeft - 1, maxAttempts)
+            pollForModalOrInput(calibration, testMode, effectiveBarcode, onResult, onStep, pollAttemptsLeft - 1, maxAttempts)
         }, 50L)
+    }
+
+    private fun findModalInputField(): AccessibilityNodeInfo? {
+        val ownPkg = BuildConfig.APPLICATION_ID
+        // Priority 1: placeholder "Штрих-код" — most reliable for SEW modal
+        val byPlaceholder = findInputByPlaceholder("Штрих-код")
+        if (byPlaceholder != null) return byPlaceholder
+        // Priority 2: focused editable in a SEW browser window (not our own overlay)
+        val focusInput = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        if (focusInput != null && focusInput.isEditable) {
+            val pkg = focusInput.packageName?.toString() ?: ""
+            if (pkg != ownPkg) return focusInput
+            focusInput.safeRecycle()
+        } else {
+            focusInput?.safeRecycle()
+        }
+        // Priority 3: any editable in a SEW browser window, excluding our overlay
+        for (win in windows) {
+            if (!win.isActive) continue
+            val root = win.root ?: continue
+            val pkg = root.packageName?.toString() ?: ""
+            if (pkg == ownPkg) {
+                root.safeRecycle()
+                continue
+            }
+            val editable = findFirstEditable(root)
+            root.safeRecycle()
+            if (editable != null) return editable
+        }
+        return null
     }
 
     private fun findInputFieldAcrossWindows(): AccessibilityNodeInfo? {
@@ -846,20 +868,17 @@ class ScannerAccessibilityService : AccessibilityService() {
     }
 
     private fun step3FindInput(
+        input: AccessibilityNodeInfo,
+        effectiveBarcode: String,
         calibration: SewCalibration,
         testMode: Boolean,
-        effectiveBarcode: String,
         onResult: SewInputCallback,
         onStep: SewStepCallback?
     ) {
-        val input = findInputFieldAcrossWindows()
-        if (input != null) {
-            onStep?.invoke("Поле ввода найдено", true, null)
-            armWatchdog(onResult)
-            step4SetText(input, effectiveBarcode, calibration, testMode, onResult, onStep)
-            return
-        }
-        releaseWatchdogAndFinish(onResult, false, "Поле ввода не найдено")
+        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "step3FindInput: pkg=${input.packageName} text='${input.text}'")
+        onStep?.invoke("Поле ввода найдено", true, null)
+        armWatchdog(onResult)
+        step4SetText(input, effectiveBarcode, calibration, testMode, onResult, onStep)
     }
 
     private fun findInputByPlaceholder(text: String): AccessibilityNodeInfo? {
