@@ -43,6 +43,7 @@ class ScannerAccessibilityService : AccessibilityService() {
     @Volatile private var lastEffectiveTarget: String = ""
     private val watchdogHandler = Handler(Looper.getMainLooper())
     private val watchdogTimeoutMs: Long = 8_000L
+    private val maxSetTextAttempts: Int = 5
     private var _inputMode: String = "fast"
 
     override fun onServiceConnected() {
@@ -909,7 +910,8 @@ class ScannerAccessibilityService : AccessibilityService() {
         calibration: SewCalibration,
         testMode: Boolean,
         onResult: SewInputCallback,
-        onStep: SewStepCallback?
+        onStep: SewStepCallback?,
+        attempt: Int = 0
     ) {
         val args = Bundle().apply {
             putCharSequence(
@@ -932,8 +934,17 @@ class ScannerAccessibilityService : AccessibilityService() {
             mainHandler.postDelayed({
                 inputNode.safeRecycle()
                 val pasted = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                if (!sewInputInProgress || sewResultDelivered) {
+                    pasted?.safeRecycle()
+                    return@postDelayed
+                }
                 if (pasted != null && pasted.isEditable) {
-                    step4SetText(pasted, barcode, calibration, testMode, onResult, onStep)
+                    if (attempt + 1 >= maxSetTextAttempts) {
+                        pasted?.safeRecycle()
+                        releaseWatchdogAndFinish(onResult, false, "Не удалось ввести штрихкод в поле")
+                    } else {
+                        step4SetText(pasted, barcode, calibration, testMode, onResult, onStep, attempt + 1)
+                    }
                 } else {
                     pasted?.safeRecycle()
                     releaseWatchdogAndFinish(onResult, false, "Ввод не зафиксирован")

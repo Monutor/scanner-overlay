@@ -87,18 +87,18 @@ object BarcodeDatabase {
         }
     }
 
-    fun getAllShelves(): List<WarehouseItem> {
-        if (!loaded) return emptyList()
-        return items.asSequence()
+    fun getAllShelves(): List<WarehouseItem> = synchronized(this) {
+        if (!loaded) emptyList()
+        else items.asSequence()
             .filter { it.type in SHELF_TYPES }
             .distinctBy { it.barcode }
             .sortedBy { it.name.lowercase() }
             .toList()
     }
 
-    fun getShelfSections(): List<String> {
-        if (!loaded) return emptyList()
-        return items.asSequence()
+    fun getShelfSections(): List<String> = synchronized(this) {
+        if (!loaded) emptyList()
+        else items.asSequence()
             .filter { it.type in SHELF_TYPES }
             .map { it.section }
             .distinct()
@@ -106,14 +106,12 @@ object BarcodeDatabase {
             .toList()
     }
 
-    fun getByBarcode(barcode: String): WarehouseItem? {
-        if (!loaded || barcode.isBlank()) return null
-        return exactMap[barcode]
+    fun getByBarcode(barcode: String): WarehouseItem? = synchronized(this) {
+        if (!loaded || barcode.isBlank()) null else exactMap[barcode]
     }
 
-    fun getAllItems(): List<WarehouseItem> {
-        if (!loaded) return emptyList()
-        return items.toList()
+    fun getAllItems(): List<WarehouseItem> = synchronized(this) {
+        if (!loaded) emptyList() else items.toList()
     }
 
     fun exportToJson(): String {
@@ -161,12 +159,14 @@ object BarcodeDatabase {
 
     fun mergeRemoteShelves(context: Context, newItems: List<WarehouseItem>) {
         if (newItems.isEmpty()) return
-        for (item in newItems) {
-            if (exactMap.containsKey(item.barcode)) continue
-            items.add(item)
-            exactMap[item.barcode] = item
+        synchronized(this) {
+            for (item in newItems) {
+                if (exactMap.containsKey(item.barcode)) continue
+                items.add(item)
+                exactMap[item.barcode] = item
+            }
+            persistSyncedFile(context)
         }
-        persistSyncedFile(context)
     }
 
     private fun persistSyncedFile(context: Context) {
