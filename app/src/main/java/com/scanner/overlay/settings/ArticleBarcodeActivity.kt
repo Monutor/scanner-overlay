@@ -70,7 +70,7 @@ private fun ArticleBarcodeScreen() {
             val found = mutableListOf<ProductItem>()
             val notFound = mutableListOf<String>()
             for (code in codes) {
-                val item = ArticleBarcodeDatabase.searchByArticleCode(code)
+                val item = ArticleBarcodeDatabase.search(code)
                 if (item != null) found.add(item) else notFound.add(code)
             }
             state = BarcodeState.Results(found, notFound)
@@ -92,7 +92,7 @@ private fun ArticleBarcodeScreen() {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Поиск по артикулу") },
+                title = { Text("Поиск по ШК") },
                 navigationIcon = {
                     IconButton(onClick = { (context as? ComponentActivity)?.finish() }) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Назад")
@@ -115,7 +115,7 @@ private fun ArticleBarcodeScreen() {
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
-                    label = { Text("Артикул") },
+                    label = { Text("Артикул или ШК") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = { doSearch() }),

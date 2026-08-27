@@ -12,6 +12,9 @@ object ArticleBarcodeDatabase {
 
     private val items = mutableListOf<ProductItem>()
     private val seenArticleCodes = HashSet<String>()
+    private val articleIndex = HashMap<String, ProductItem>()
+    private val barcodeIndex = HashMap<String, ProductItem>()
+    private val barcodeSuffixIndex = HashMap<String, ProductItem>()
     private var loaded = false
 
     fun init(context: Context) {
@@ -58,6 +61,9 @@ object ArticleBarcodeDatabase {
     private fun parseJson(jsonText: String) {
         items.clear()
         seenArticleCodes.clear()
+        articleIndex.clear()
+        barcodeIndex.clear()
+        barcodeSuffixIndex.clear()
         try {
             val array = JSONArray(jsonText)
             for (i in 0 until array.length()) {
@@ -65,11 +71,15 @@ object ArticleBarcodeDatabase {
                 val articleCode = optString(obj, "articleCode")
                 if (articleCode.isEmpty()) continue
                 seenArticleCodes.add(articleCode)
-                items.add(ProductItem(
+                val item = ProductItem(
                     articleCode = articleCode,
                     name = optString(obj, "name"),
                     barcode = optString(obj, "barcode")
-                ))
+                )
+                items.add(item)
+                articleIndex.putIfAbsent(articleCode, item)
+                if (item.barcode.isNotEmpty()) barcodeIndex.putIfAbsent(item.barcode, item)
+                if (item.barcode.length >= 5) barcodeSuffixIndex.putIfAbsent(item.barcode.takeLast(5), item)
             }
             loaded = true
         } catch (e: Exception) {
@@ -81,6 +91,9 @@ object ArticleBarcodeDatabase {
         for (item in newItems) {
             if (!seenArticleCodes.contains(item.articleCode)) {
                 seenArticleCodes.add(item.articleCode)
+                articleIndex.putIfAbsent(item.articleCode, item)
+                if (item.barcode.isNotEmpty()) barcodeIndex.putIfAbsent(item.barcode, item)
+                if (item.barcode.length >= 5) barcodeSuffixIndex.putIfAbsent(item.barcode.takeLast(5), item)
                 items.add(item)
             }
         }
@@ -91,7 +104,14 @@ object ArticleBarcodeDatabase {
     }
 
     fun searchByArticleCode(code: String): ProductItem? {
-        return items.firstOrNull { it.articleCode == code }
+        return articleIndex[code]
+    }
+
+    fun search(code: String): ProductItem? {
+        val trimmed = code.trim()
+        return articleIndex[trimmed]
+            ?: barcodeIndex[trimmed]
+            ?: if (trimmed.length == 5 && trimmed.all { it.isDigit() }) barcodeSuffixIndex[trimmed] else null
     }
 
     fun getAllItems(): List<ProductItem> {
@@ -117,6 +137,9 @@ object ArticleBarcodeDatabase {
     fun loadFromExternalJson(jsonText: String) {
         items.clear()
         seenArticleCodes.clear()
+        articleIndex.clear()
+        barcodeIndex.clear()
+        barcodeSuffixIndex.clear()
         try {
             val array = JSONArray(jsonText)
             for (i in 0 until array.length()) {
@@ -124,11 +147,15 @@ object ArticleBarcodeDatabase {
                 val articleCode = optString(obj, "Код товара")
                 if (articleCode.isEmpty()) continue
                 seenArticleCodes.add(articleCode)
-                items.add(ProductItem(
+                val item = ProductItem(
                     articleCode = articleCode,
                     name = optString(obj, "Наименование"),
                     barcode = optString(obj, "ШК товара")
-                ))
+                )
+                items.add(item)
+                articleIndex.putIfAbsent(articleCode, item)
+                if (item.barcode.isNotEmpty()) barcodeIndex.putIfAbsent(item.barcode, item)
+                if (item.barcode.length >= 5) barcodeSuffixIndex.putIfAbsent(item.barcode.takeLast(5), item)
             }
             loaded = true
         } catch (e: Exception) {
@@ -139,6 +166,9 @@ object ArticleBarcodeDatabase {
     fun reset() {
         items.clear()
         seenArticleCodes.clear()
+        articleIndex.clear()
+        barcodeIndex.clear()
+        barcodeSuffixIndex.clear()
         loaded = false
     }
 
