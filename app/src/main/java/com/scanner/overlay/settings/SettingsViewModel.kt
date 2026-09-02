@@ -363,6 +363,7 @@ class SettingsViewModel @Inject constructor(
         if (_deviceMode.value == mode) return
         _deviceMode.value = mode
         prefs.edit().putString(PREF_KEY_DEVICE_MODE, mode).apply()
+        ScannerForegroundService.rebuildPanel()
     }
 
     fun setPanelEdge(edge: String) {
