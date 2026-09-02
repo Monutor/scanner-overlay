@@ -27,7 +27,8 @@ import com.scanner.overlay.settings.ShelfPickerActivity
 
 class FloatingPanel(
     private val context: Context,
-    private val prefs: SharedPreferences
+    private val prefs: SharedPreferences,
+    private val deviceMode: String = "phone"
 ) {
     enum class Edge { LEFT, RIGHT }
 
@@ -182,14 +183,18 @@ class FloatingPanel(
         }
 
         data class Btn(val icon: Int, val color: String, val label: String)
-        val buttons = listOf(
+        val allButtons = listOf(
             Btn(R.drawable.ic_scanner, "#1976D2", "Сканер"),
             Btn(R.drawable.ic_shelf, "#FB8C00", "Полка"),
             Btn(R.drawable.ic_article, "#388E3C", "Артикул"),
             Btn(R.drawable.ic_article_barcode, "#7B1FA2", "ШК")
         )
+        val visibleButtons = when (deviceMode) {
+            "tsd" -> listOf(allButtons[2], allButtons[3])
+            else -> allButtons
+        }
 
-        buttons.forEachIndexed { i, btn ->
+        visibleButtons.forEachIndexed { i, btn ->
             val btnLayout = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER_HORIZONTAL
@@ -221,7 +226,7 @@ class FloatingPanel(
             btnLayout.addView(lbl)
 
             body.addView(btnLayout)
-            if (i < buttons.size - 1) {
+            if (i < visibleButtons.size - 1) {
                 val spacer = View(context)
                 spacer.layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, dp(GAP_DP)

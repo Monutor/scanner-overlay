@@ -72,7 +72,7 @@ class ScannerForegroundService : Service() {
         prefs.edit().putBoolean(PREF_KEY_SERVICE_RUNNING, true).apply()
         createNotificationChannel()
         UpdateNotifier.check(this)
-        floatingPanel = FloatingPanel(this, prefs)
+        floatingPanel = FloatingPanel(this, prefs, prefs.getString("device_mode", "phone") ?: "phone")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID,
