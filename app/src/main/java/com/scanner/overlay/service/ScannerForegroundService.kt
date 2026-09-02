@@ -59,6 +59,10 @@ class ScannerForegroundService : Service() {
                 srv.floatingPanel.setOpacity(value)
             }
         }
+
+        fun rebuildPanel() {
+            serviceInstance?.let { srv -> srv.floatingPanel.rebuild() }
+        }
     }
 
     override fun onCreate() {

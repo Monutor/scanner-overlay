@@ -316,7 +316,7 @@ class FloatingPanel(
 
     fun getEdge(): Edge = edge
 
-    private fun rebuild() {
+    fun rebuild() {
         rootView?.let { wm.removeView(it) }
         rootView = null
         params = null
