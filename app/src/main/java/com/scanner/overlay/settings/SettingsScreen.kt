@@ -120,6 +120,7 @@ fun SettingsScreen(
     val isTtsEnabled by viewModel.isTtsEnabled.collectAsState()
     val scanQrCode by viewModel.scanQrCode.collectAsState()
     val scanHistory by viewModel.scanHistory.collectAsState()
+    val deviceMode by viewModel.deviceMode.collectAsState()
 
 
 
@@ -179,6 +180,11 @@ fun SettingsScreen(
                 )
 
                 SectionEyebrow("Поверхность")
+
+                DeviceModeCard(
+                    deviceMode = deviceMode,
+                    onModeChange = { viewModel.setDeviceMode(it) }
+                )
 
                 FloatingButtonsCard(
                     isFloatingButtonEnabled = isFloatingButtonEnabled,
@@ -459,6 +465,47 @@ private fun FloatingButtonsCard(
                     opacity = panelOpacity,
                     onOpacityChange = onOpacityChange
                 )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DeviceModeCard(
+    deviceMode: String,
+    onModeChange: (String) -> Unit
+) {
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text(
+            text = "Режим устройства",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            fontWeight = FontWeight.Medium
+        )
+        Spacer(Modifier.height(8.dp))
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+            SegmentedButton(
+                selected = deviceMode == "phone",
+                onClick = { onModeChange("phone") },
+                shape = SegmentedButtonDefaults.itemShape(
+                    index = 0,
+                    count = 2
+                ),
+                icon = {}
+            ) {
+                Text("Телефон", style = MaterialTheme.typography.labelLarge)
+            }
+            SegmentedButton(
+                selected = deviceMode == "tsd",
+                onClick = { onModeChange("tsd") },
+                shape = SegmentedButtonDefaults.itemShape(
+                    index = 1,
+                    count = 2
+                ),
+                icon = {}
+            ) {
+                Text("ТСД", style = MaterialTheme.typography.labelLarge)
             }
         }
     }
