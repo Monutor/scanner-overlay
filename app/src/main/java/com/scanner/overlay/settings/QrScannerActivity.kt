@@ -17,10 +17,23 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -105,12 +118,17 @@ private fun QrScannerScreen(
         }
     ) { padding ->
         if (permissionGranted) {
-            QrCameraView(
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
-                onQrDetected = onScanned
-            )
+            ) {
+                QrCameraView(
+                    modifier = Modifier.fillMaxSize(),
+                    onQrDetected = onScanned
+                )
+                ScanFrameOverlay()
+            }
         }
     }
 }
@@ -226,5 +244,63 @@ private fun scanQrImage(
             }
     } else {
         imageProxy.close()
+    }
+}
+
+@Composable
+private fun ScanFrameOverlay() {
+    val boxFraction = 0.7f          // square side as fraction of min screen dimension
+    val scrimAlpha = 0.55f
+    val frameColor = Color(0xFF388E3C)   // green
+    val frameStrokeWidth = 6.dp
+    val cornerRadius = 12.dp
+    val hintColor = Color.White
+
+    BoxWithConstraints(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val boxSize = (minOf(size.width, size.height) * boxFraction).roundToInt()
+            val left = (size.width - boxSize) / 2
+            val top = (size.height - boxSize) / 2
+            val right = left + boxSize
+            val bottom = top + boxSize
+
+            // Dark scrim: four strips around the central square.
+            drawRect(
+                color = Color.Black.copy(scrimAlpha),
+                topLeft = Offset(x = 0f, y = 0f),
+                size = Size(size.width.toFloat(), top.toFloat())
+            )
+            drawRect(
+                color = Color.Black.copy(scrimAlpha),
+                topLeft = Offset(x = 0f, y = bottom.toFloat()),
+                size = Size(size.width.toFloat(), (size.height - bottom).toFloat())
+            )
+            drawRect(
+                color = Color.Black.copy(scrimAlpha),
+                topLeft = Offset(x = 0f, y = top.toFloat()),
+                size = Size(left.toFloat(), boxSize.toFloat())
+            )
+            drawRect(
+                color = Color.Black.copy(scrimAlpha),
+                topLeft = Offset(x = right.toFloat(), y = top.toFloat()),
+                size = Size((size.width - right).toFloat(), boxSize.toFloat())
+            )
+
+            // Rounded green frame around the scan area.
+            drawRoundRect(
+                color = frameColor,
+                topLeft = Offset(x = left.toFloat(), y = top.toFloat()),
+                size = Size(boxSize.toFloat(), boxSize.toFloat()),
+                cornerRadius = CornerRadius(cornerRadius.toPx(), cornerRadius.toPx()),
+                style = Stroke(width = frameStrokeWidth.toPx())
+            )
+        }
+
+        // Hint text centered horizontally, shifted down to sit just below the frame.
+        Text(
+            text = "Поместите QR-код в рамку",
+            color = hintColor,
+            modifier = Modifier.offset(y = ((minOf(constraints.minWidth, constraints.minHeight)) * boxFraction / 2f).dp)
+        )
     }
 }

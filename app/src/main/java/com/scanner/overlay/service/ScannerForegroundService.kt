@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
+import android.widget.Toast
 import com.scanner.overlay.R
 import com.scanner.overlay.overlay.OverlayActivity
 import com.scanner.overlay.update.UpdateNotifier
@@ -72,7 +73,7 @@ class ScannerForegroundService : Service() {
         prefs.edit().putBoolean(PREF_KEY_SERVICE_RUNNING, true).apply()
         createNotificationChannel()
         UpdateNotifier.check(this)
-        floatingPanel = FloatingPanel(this, prefs, prefs.getString("device_mode", "phone") ?: "phone")
+        floatingPanel = FloatingPanel(this, prefs)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID,
@@ -94,16 +95,17 @@ class ScannerForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-                    val settingsIntent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
-                        data = Uri.parse("package:$packageName")
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    startActivity(settingsIntent)
-                    stopSelf()
-                    return START_NOT_STICKY
+                if (floatingPanel.show()) {
+                    return START_STICKY
                 }
-                floatingPanel.show()
+                Toast.makeText(this, "Разрешите отображение поверх приложений", Toast.LENGTH_LONG).show()
+                val settingsIntent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
+                    data = Uri.parse("package:$packageName")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(settingsIntent)
+                stopSelf()
+                return START_NOT_STICKY
             }
             ACTION_STOP -> stopSelf()
             ACTION_SET_EDGE -> {
@@ -112,8 +114,9 @@ class ScannerForegroundService : Service() {
                 floatingPanel.setEdge(edgeEnum)
             }
             null -> {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.canDrawOverlays(this)) {
-                    floatingPanel.show()
+                if (!floatingPanel.show()) {
+                    stopSelf()
+                    return START_NOT_STICKY
                 }
             }
         }

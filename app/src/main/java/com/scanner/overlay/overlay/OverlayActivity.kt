@@ -793,6 +793,8 @@ fun CameraPreview(
     val scanCompleted = remember { AtomicBoolean(false) }
     val cameraFrameHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
     val scannerRef = remember { mutableStateOf<BarcodeAnalyzer?>(null) }
+    val previewUseCase = remember { mutableStateOf<Preview?>(null) }
+    val analysisUseCase = remember { mutableStateOf<ImageAnalysis?>(null) }
 
     LaunchedEffect(resetScanCompleted) {
         if (resetScanCompleted) {
@@ -811,26 +813,35 @@ fun CameraPreview(
     }
 
     DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_DESTROY) {
-                cameraProviderRef.value?.unbindAll()
-                cameraControl.value = null
-                cameraProviderRef.value = null
-                analyzerExecutor.shutdownNow()
-                scannerRef.value?.close()
-                scannerRef.value = null
+        val cleanedUp = java.util.concurrent.atomic.AtomicBoolean(false)
+        fun releaseCamera() {
+            if (!cleanedUp.compareAndSet(false, true)) return
+            try {
+                val provider = cameraProviderRef.value
+                val useCases = listOfNotNull(previewUseCase.value, analysisUseCase.value)
+                if (provider != null && useCases.isNotEmpty()) {
+                    provider.unbind(*useCases.toTypedArray())
+                }
+            } catch (_: Exception) {
+                // Already unbound (e.g. cleared by a newer session's bind): nothing to release.
             }
+            CameraBinding.recordReleased()
+            cameraControl.value = null
+            cameraProviderRef.value = null
+            previewUseCase.value = null
+            analysisUseCase.value = null
+            analyzerExecutor.shutdownNow()
+            scannerRef.value?.close()
+            scannerRef.value = null
+        }
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_DESTROY) releaseCamera()
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             isActive.set(false)
             lifecycleOwner.lifecycle.removeObserver(observer)
-            cameraProviderRef.value?.unbindAll()
-            cameraControl.value = null
-            cameraProviderRef.value = null
-            analyzerExecutor.shutdownNow()
-            scannerRef.value?.close()
-            scannerRef.value = null
+            releaseCamera()
         }
     }
 
@@ -846,57 +857,65 @@ fun CameraPreview(
                     return@addListener
                 }
 
-                try {
-                    val cameraProvider = cameraProviderFuture.get()
-                    cameraProviderRef.value = cameraProvider
-                    val preview = Preview.Builder().build().also {
-                        it.setSurfaceProvider(previewView.surfaceProvider)
-                    }
-                    val imageAnalysis = ImageAnalysis.Builder()
-                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                        .apply {
-                            val quality = ctx.getSharedPreferences("scanner_prefs", android.content.Context.MODE_PRIVATE)
-                                .getInt("scan_quality", 1)
-                            val resolution = when (quality) {
-                                0 -> android.util.Size(640, 360)
-                                2 -> android.util.Size(1920, 1080)
-                                else -> android.util.Size(1280, 720)
-                            }
-                            setDefaultResolution(resolution)
+                val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+                CameraBinding.runWhenCameraFree(mainHandler) {
+                    if (!isActive.get()) return@runWhenCameraFree
+                    try {
+                        val cameraProvider = cameraProviderFuture.get()
+                        android.util.Log.d("CameraPreview", "ProcessCameraProvider ready, binding camera")
+                        cameraProviderRef.value = cameraProvider
+                        val preview = Preview.Builder().build().also {
+                            it.setSurfaceProvider(previewView.surfaceProvider)
                         }
-                        .build()
-                    val scanQrCodePref = ctx.getSharedPreferences("scanner_prefs", android.content.Context.MODE_PRIVATE)
-                        .getBoolean("scan_qr_code", true)
-                    imageAnalysis.setAnalyzer(
-                        analyzerExecutor,
-                        BarcodeAnalyzer(
-                            scanQrCode = scanQrCodePref,
-                            executor = analyzerExecutor,
-                            onResult = { result ->
-                                cameraFrameHandler.post {
-                                    try {
-                                        if (result is ScannerResult.Success && scanCompleted.compareAndSet(false, true)) {
-                                            onBarcodeScanned(result)
+                        val imageAnalysis = ImageAnalysis.Builder()
+                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                            .apply {
+                                val quality = ctx.getSharedPreferences("scanner_prefs", android.content.Context.MODE_PRIVATE)
+                                    .getInt("scan_quality", 1)
+                                val resolution = when (quality) {
+                                    0 -> android.util.Size(640, 360)
+                                    2 -> android.util.Size(1920, 1080)
+                                    else -> android.util.Size(1280, 720)
+                                }
+                                setDefaultResolution(resolution)
+                            }
+                            .build()
+                        val scanQrCodePref = ctx.getSharedPreferences("scanner_prefs", android.content.Context.MODE_PRIVATE)
+                            .getBoolean("scan_qr_code", true)
+                        imageAnalysis.setAnalyzer(
+                            analyzerExecutor,
+                            BarcodeAnalyzer(
+                                scanQrCode = scanQrCodePref,
+                                executor = analyzerExecutor,
+                                onResult = { result ->
+                                    cameraFrameHandler.post {
+                                        try {
+                                            if (result is ScannerResult.Success && scanCompleted.compareAndSet(false, true)) {
+                                                onBarcodeScanned(result)
+                                            }
+                                        } catch (e: Exception) {
+                                            android.util.Log.e("CameraPreview", "handler crash", e)
                                         }
-                                    } catch (e: Exception) {
-                                        android.util.Log.e("CameraPreview", "handler crash", e)
                                     }
                                 }
-                            }
-                        ).also { scannerRef.value = it }
-                    )
-                    cameraProvider.unbindAll()
-                    val camera = cameraProvider.bindToLifecycle(
-                        lifecycleOwner,
-                        CameraSelector.DEFAULT_BACK_CAMERA,
-                        preview,
-                        imageAnalysis
-                    )
-                    cameraControl.value = camera.cameraControl
-                    onCameraReady(camera.cameraControl, previewView)
-                } catch (e: Exception) {
-                    android.util.Log.e("CameraPreview", "bindToLifecycle failed", e)
-                    onCameraError(e)
+                            ).also { scannerRef.value = it }
+                        )
+                        cameraProvider.unbindAll()
+                        val camera = cameraProvider.bindToLifecycle(
+                            lifecycleOwner,
+                            CameraSelector.DEFAULT_BACK_CAMERA,
+                            preview,
+                            imageAnalysis
+                        )
+                        previewUseCase.value = preview
+                        analysisUseCase.value = imageAnalysis
+                        cameraControl.value = camera.cameraControl
+                        onCameraReady(camera.cameraControl, previewView)
+                    } catch (e: Exception) {
+                        android.util.Log.e("CameraPreview", "bindToLifecycle failed", e)
+                        CameraBinding.forceReset(cameraProviderRef.value)
+                        onCameraError(e)
+                    }
                 }
             }, androidx.core.content.ContextCompat.getMainExecutor(ctx))
 

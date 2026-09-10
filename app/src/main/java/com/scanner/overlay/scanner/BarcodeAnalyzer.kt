@@ -167,6 +167,7 @@ class BarcodeAnalyzer(
         synchronized(scanLock) {
             lastScannedCode = null
         }
+        scannedCodes.clear()
     }
 
     fun close() {

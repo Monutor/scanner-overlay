@@ -140,6 +140,7 @@ class ScannerAccessibilityService : AccessibilityService() {
             val found = findInputField(root)
             if (found != null) {
                 if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "  window[$i] -> FOUND editable field! pkg=${found.packageName} className=${found.className}")
+                root.safeRecycle()
                 return found
             }
             root.safeRecycle()
@@ -1011,7 +1012,11 @@ class ScannerAccessibilityService : AccessibilityService() {
         for (win in windows) {
             val root = win.root ?: continue
             textNode = findSendButton(root, buttonTexts)
-            if (textNode != null) break
+            if (textNode != null) {
+                root.safeRecycle()
+                break
+            }
+            root.safeRecycle()
         }
         if (textNode == null) {
             if (testMode) onStep?.invoke("Кнопка «Готово» найдена", false, "Текст не найден")
@@ -1090,8 +1095,10 @@ class ScannerAccessibilityService : AccessibilityService() {
             val found = findSendButton(root, buttonTexts)
             if (found != null) {
                 found.safeRecycle()
+                root.safeRecycle()
                 return true
             }
+            root.safeRecycle()
         }
         return false
     }

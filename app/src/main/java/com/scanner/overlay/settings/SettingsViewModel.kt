@@ -86,7 +86,6 @@ class SettingsViewModel @Inject constructor(
         private const val PREF_KEY_PRODUCT_DB_VERSION = "product_db_version"
         private const val PREF_KEY_CHANGE_LOG = "change_log"
         private const val PREF_KEY_SCAN_QR_CODE = "scan_qr_code"
-        private const val PREF_KEY_DEVICE_MODE = "device_mode"
     }
 
     private val _isFloatingButtonEnabled = MutableStateFlow(false)
@@ -120,11 +119,6 @@ class SettingsViewModel @Inject constructor(
         prefs.getBoolean(PREF_KEY_SCAN_QR_CODE, true)
     )
     val scanQrCode: StateFlow<Boolean> = _scanQrCode.asStateFlow()
-
-    private val _deviceMode = MutableStateFlow(
-        prefs.getString(PREF_KEY_DEVICE_MODE, "phone") ?: "phone"
-    )
-    val deviceMode: StateFlow<String> = _deviceMode.asStateFlow()
 
     private val _panelEdge = MutableStateFlow(
         prefs.getString(PREF_KEY_PANEL_EDGE, "right") ?: "right"
@@ -296,10 +290,6 @@ class SettingsViewModel @Inject constructor(
             prefs.edit().putBoolean(PREF_KEY_SERVICE_RUNNING, false).apply()
             _isFloatingButtonEnabled.value = false
         } else {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(app)) {
-                openOverlaySettings()
-                return
-            }
             intent.action = ScannerForegroundService.ACTION_START
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 app.startForegroundService(intent)
@@ -357,13 +347,6 @@ class SettingsViewModel @Inject constructor(
         if (_scanQrCode.value == enabled) return
         _scanQrCode.value = enabled
         prefs.edit().putBoolean(PREF_KEY_SCAN_QR_CODE, enabled).apply()
-    }
-
-    fun setDeviceMode(mode: String) {
-        if (_deviceMode.value == mode) return
-        _deviceMode.value = mode
-        prefs.edit().putString(PREF_KEY_DEVICE_MODE, mode).apply()
-        ScannerForegroundService.rebuildPanel()
     }
 
     fun setPanelEdge(edge: String) {
