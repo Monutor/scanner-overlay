@@ -51,8 +51,10 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -65,11 +67,13 @@ import androidx.compose.ui.platform.LocalView
 import androidx.activity.compose.BackHandler
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import androidx.compose.runtime.DisposableEffect
 import com.scanner.overlay.R
+import com.scanner.overlay.BuildConfig
 import com.scanner.overlay.accessibility.ScannerAccessibilityService
 import com.scanner.overlay.scanner.ArticleBarcodeDatabase
 import com.scanner.overlay.scanner.BarcodeAnalyzer
@@ -84,15 +88,35 @@ import com.scanner.overlay.ScannerApp
 @AndroidEntryPoint
 class OverlayActivity : ComponentActivity() {
 
-    private lateinit var vibrator: Vibrator
+    // Nullable: some devices have no vibrator at all, and setupVibrator() must survive that.
+    private var vibrator: Vibrator? = null
     private lateinit var prefs: android.content.SharedPreferences
+
+    private val cameraPermissionGranted = mutableStateOf(false)
+    private val cameraPermissionBlocked = mutableStateOf(false)
+
+    // Настройки храним в State, а не в val из onCreate: Activity запускается в singleTask,
+    // поэтому после возврата из системных настроек onCreate не вызывается, и значения,
+    // прочитанные один раз, оставались бы прежними. refreshOverlaySettings() в onResume
+    // перечитывает prefs и перезапускает нужные LaunchedEffect/pointerInput по новым ключам.
+    private val tapToFocusEnabledState = mutableStateOf(true)
+    private val autoFocusEnabledState = mutableStateOf(false)
+    private val sewCalibratedState = mutableStateOf(false)
+    private val autoImportSewState = mutableStateOf(false)
+
+    private var overlayViewModel: OverlayViewModel? = null
+
+    private fun refreshOverlaySettings() {
+        tapToFocusEnabledState.value = prefs.getBoolean("tap_to_focus_enabled", true)
+        autoFocusEnabledState.value = prefs.getBoolean("auto_focus_enabled", false)
+        sewCalibratedState.value = buildSewCalibration().isCalibrated
+        autoImportSewState.value = prefs.getBoolean("auto_import_sew", false)
+    }
 
     private var textToSpeech: TextToSpeech? = null
     private var ttsReady = false
 
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
-
-    private val isSubmittingToSew = mutableStateOf(false)
 
     private fun buildSewCalibration(): SewCalibration {
         return SewCalibration(
@@ -109,14 +133,19 @@ class OverlayActivity : ComponentActivity() {
     }
 
     private fun triggerSewAutoInput(barcode: String) {
-        isSubmittingToSew.value = true
+        // Прогресс-оверлей не показываем: Activity финиширует сразу, чтобы окно SEW
+        // вышло наверх для жестов accessibility-сервиса; результат — уведомлением.
         val cal = buildSewCalibration()
-        android.util.Log.d(
-            "OverlayActivity",
-            "triggerSewAutoInput: barcode=$barcode pkg=${cal.targetPackage} isCalibrated=${cal.isCalibrated} " +
-                "openModal=(${cal.openModal.x},${cal.openModal.y}) " +
-                "confirm=(${cal.confirm.x},${cal.confirm.y})"
-        )
+        // Под DEBUG: в release-сборке строка с реальным артикулом со склада попадала бы
+        // в logcat, доступный баг-репортёрам и процессам с READ_LOGS.
+        if (BuildConfig.DEBUG) {
+            android.util.Log.d(
+                "OverlayActivity",
+                "triggerSewAutoInput: barcode=$barcode pkg=${cal.targetPackage} isCalibrated=${cal.isCalibrated} " +
+                    "openModal=(${cal.openModal.x},${cal.openModal.y}) " +
+                    "confirm=(${cal.confirm.x},${cal.confirm.y})"
+            )
+        }
         val service = ScannerAccessibilityService.instance
         if (service == null) {
             android.util.Log.w("OverlayActivity", "Accessibility service not running, falling back")
@@ -133,45 +162,74 @@ class OverlayActivity : ComponentActivity() {
     }
 
     private fun onSewInputResult(ok: Boolean, message: String) {
+        // Результат приходит через секунды, когда Activity уже финишировала:
+        // уведомление и вибрация идут через контекст приложения, а не мёртвую Activity.
+        val appContext = applicationContext
         mainHandler.post {
-            isSubmittingToSew.value = false
             val title = if (ok) "Штрих введён" else "Ошибка ввода в SEW"
             val text = if (ok) "Готово" else message.take(200)
-            notifySewResult(ok, title, text)
-            vibrateResult(ok)
+            notifySewResult(appContext, ok, title, text)
+            vibrateResult(appContext, ok)
         }
     }
 
-    private fun notifySewResult(success: Boolean, title: String, text: String) {
+    private fun notifySewResult(
+        context: android.content.Context,
+        success: Boolean,
+        title: String,
+        text: String
+    ) {
         try {
-            val builder = NotificationCompat.Builder(this, ScannerApp.SEW_RESULT_CHANNEL_ID)
+            val builder = NotificationCompat.Builder(context, ScannerApp.SEW_RESULT_CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_scan)
                 .setContentTitle(title)
                 .setContentText(text)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setAutoCancel(true)
-            getSystemService(android.app.NotificationManager::class.java)
+            context.getSystemService(android.app.NotificationManager::class.java)
                 .notify(ScannerApp.SEW_RESULT_NOTIFICATION_ID, builder.build())
         } catch (e: Exception) {
             android.util.Log.e("OverlayActivity", "notifySewResult failed", e)
         }
     }
 
-    private fun vibrateResult(ok: Boolean) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val ms = if (ok) 100L else 400L
-            vibrator.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
+    private fun vibrateResult(context: android.content.Context, ok: Boolean) {
+        try {
+            val vib: Vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                (context.getSystemService(VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                context.getSystemService(VIBRATOR_SERVICE) as Vibrator
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val ms = if (ok) 100L else 400L
+                vib.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("OverlayActivity", "vibrateResult failed", e)
         }
     }
 
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (!granted) {
+        if (granted) {
+            cameraPermissionBlocked.value = false
+            cameraPermissionGranted.value = true
+        } else if (!shouldShowRequestPermissionRationale(Manifest.permission.CAMERA)) {
+            // «Больше не спрашивать»: системный диалог закрыт навсегда — только через настройки
+            cameraPermissionBlocked.value = true
+        } else {
             toastAtBottom(getString(R.string.camera_unavailable), Toast.LENGTH_LONG)
             finish()
         }
+        // Диалог камеры закрылся — только теперь можно спросить про уведомления.
+        checkNotificationsPermission()
     }
+
+    private val notificationsPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* результат не критичен: без гранта уведомление просто не покажется */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -179,10 +237,15 @@ class OverlayActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL)
         window.addFlags(WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        window.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+        // NB: без FLAG_NOT_FOCUSABLE — иначе окно не получает key-focus,
+        // Back уходит окну под нами (SEW) и BackHandler не срабатывает.
 
         prefs = getSharedPreferences("scanner_prefs", MODE_PRIVATE)
-        BarcodeDatabase.init(this)
+        // Дисковый I/O (assets + файлы) — в фон, чтобы не тормозить старт на Main-потоке.
+        // Читатели BarcodeDatabase потокобезопасны и вернут пусто до конца загрузки.
+        lifecycleScope.launch(Dispatchers.IO) {
+            BarcodeDatabase.init(applicationContext)
+        }
         textToSpeech = TextToSpeech(this) { status ->
             ttsReady = (status == TextToSpeech.SUCCESS)
             if (ttsReady) {
@@ -202,18 +265,19 @@ class OverlayActivity : ComponentActivity() {
             prefs.edit().putBoolean("focus_hint_shown", true).apply()
         }
 
-        val tapToFocusEnabled = prefs.getBoolean("tap_to_focus_enabled", true)
-        val autoFocusEnabled = prefs.getBoolean("auto_focus_enabled", false)
-        val sewCalibrated = buildSewCalibration().isCalibrated
-        val autoImportSew = prefs.getBoolean("auto_import_sew", false)
+        refreshOverlaySettings()
 
         setContent {
             val viewModel = hiltViewModel<OverlayViewModel>()
+            overlayViewModel = viewModel
             MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
+                // Surface по умолчанию красит непрозрачный colorScheme.background, чем
+                // полностью отменял Theme.ScannerOverlay.Transparent: сквозь оверлей было
+                // не видно ничего, и расчётный полупрозрачный скрим 0xE6000000 ниже
+                // становился бессмысленным (он и так рассчитан на 90 % затемнения).
+                Surface(modifier = Modifier.fillMaxSize(), color = Color.Transparent) {
                     OverlayContent(
                         viewModel = viewModel,
-                        isSubmittingToSew = isSubmittingToSew,
                         onClose = { finish() },
                         onBarcodeScanned = { barcode, productName -> onBarcodeScanned(barcode, productName) },
                         onInjectToSew = { barcode ->
@@ -222,13 +286,19 @@ class OverlayActivity : ComponentActivity() {
                         onCopyToClipboard = { barcode ->
                             copyToClipboard(barcode)
                         },
+                        onCopyToClipboardForSew = { barcode ->
+                            copyToClipboard(barcode, finishAfter = false)
+                        },
                         onRetry = {
                             viewModel.resetToScanning()
                         },
-                        tapToFocusEnabled = tapToFocusEnabled,
-                        autoFocusEnabled = autoFocusEnabled,
-                        sewCalibrated = sewCalibrated,
-                        autoImportSew = autoImportSew
+                        tapToFocusEnabled = tapToFocusEnabledState,
+                        autoFocusEnabled = autoFocusEnabledState,
+                        sewCalibrated = sewCalibratedState,
+                        autoImportSew = autoImportSewState,
+                        hasCameraPermission = cameraPermissionGranted,
+                        permissionBlocked = cameraPermissionBlocked,
+                        onOpenSettings = { openAppSettings() }
                     )
                 }
             }
@@ -236,10 +306,62 @@ class OverlayActivity : ComponentActivity() {
     }
 
     private fun checkCameraPermission() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+        if (hasCameraPermission()) {
+            cameraPermissionGranted.value = true
+        } else {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    private fun hasCameraPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+
+    // Результат SEW-ввода показываем уведомлением — на API 33+ без гранта оно молча дропается.
+    // Оверлей могут открывать, ни разу не заходя в MainActivity, поэтому просим и здесь.
+    // Зовём из колбэка cameraPermissionLauncher: два launch() подряд в одном onCreate означали,
+    // что второй системный диалог показывается поверх первого, и на API 33+ запрос молча
+    // игнорируется — уведомление о результате SEW-ввода так и не появлялось.
+    private fun checkNotificationsPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
             != PackageManager.PERMISSION_GRANTED
         ) {
-            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+            notificationsPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Возврат из настроек: разрешение могли выдать там — подхватываем без перезапуска
+        if (hasCameraPermission()) {
+            cameraPermissionBlocked.value = false
+            cameraPermissionGranted.value = true
+        }
+        // ...и настройки сканера тоже могли поменяться: Activity singleTask, onCreate
+        // при возврате не вызывается, поэтому перечитываем их здесь.
+        if (::prefs.isInitialized) {
+            refreshOverlaySettings()
+        }
+    }
+
+    // singleTask переиспользует живой инстанс: onCreate не вызывается, и пользователь
+    // видел бы результат предыдущего скана вместо камеры. Возвращаем скан в исходное состояние.
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        overlayViewModel?.resetToScanning()
+    }
+
+    private fun openAppSettings() {
+        try {
+            val intent = android.content.Intent(
+                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                android.net.Uri.fromParts("package", packageName, null)
+            )
+            startActivity(intent)
+        } catch (e: Exception) {
+            android.util.Log.e("OverlayActivity", "openAppSettings failed", e)
         }
     }
 
@@ -265,7 +387,7 @@ class OverlayActivity : ComponentActivity() {
         }
     }
 
-    private fun copyToClipboard(barcode: String) {
+    private fun copyToClipboard(barcode: String, finishAfter: Boolean = true) {
         try {
             val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
             clipboard.setPrimaryClip(ClipData.newPlainText("barcode", barcode))
@@ -273,41 +395,57 @@ class OverlayActivity : ComponentActivity() {
         } catch (e: Exception) {
             android.util.Log.e("OverlayActivity", "copyToClipboard error", e)
         }
-        if (!isFinishing) finish()
+        if (finishAfter && !isFinishing) finish()
     }
 
     private fun setupVibrator() {
-        vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val vm = getSystemService(VIBRATOR_MANAGER_SERVICE) as VibratorManager
-            vm.defaultVibrator
-        } else {
-            @Suppress("DEPRECATION")
-            getSystemService(VIBRATOR_SERVICE) as Vibrator
+        // Called straight from onCreate: a device without a vibrator returns null from
+        // getSystemService, and the unchecked cast would kill the Activity before the
+        // camera ever starts. Feedback is optional, so failures must not be fatal.
+        vibrator = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                (getSystemService(VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(VIBRATOR_SERVICE) as? Vibrator
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("OverlayActivity", "setupVibrator: no vibrator available", e)
+            null
         }
     }
 
     private fun playBeep() {
+        var afd: android.content.res.AssetFileDescriptor? = null
         try {
-            resources.openRawResourceFd(R.raw.scan_beep)?.use { afd ->
-                val mp = MediaPlayer()
-                mp.setOnErrorListener { _, what, extra ->
-                    mp.release()
-                    playSystemBeep()
-                    true
-                }
-                mp.setOnCompletionListener { it.release() }
-                mp.setOnPreparedListener { player ->
-                    try {
-                        player.start()
-                    } catch (_: Exception) {
-                        player.release()
-                        playSystemBeep()
-                    }
-                }
-                mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
-                mp.prepareAsync()
+            afd = resources.openRawResourceFd(R.raw.scan_beep) ?: return
+            val mp = MediaPlayer()
+            // AFD держим открытым до onPrepared/onError. use{} закрывал дескриптор сразу
+            // после prepareAsync(), а MediaPlayer читает из него в своём потоке: на части
+            // прошивок первый скан проигрывал системный бип вместо scan_beep (fallback
+            // playSystemBeep срабатывал по onError).
+            fun release() {
+                try { mp.release() } catch (_: Exception) {}
+                try { afd?.close() } catch (_: Exception) {}
             }
+            mp.setOnErrorListener { _, _, _ ->
+                release()
+                playSystemBeep()
+                true
+            }
+            mp.setOnCompletionListener { release() }
+            mp.setOnPreparedListener { player ->
+                try {
+                    player.start()
+                } catch (_: Exception) {
+                    release()
+                    playSystemBeep()
+                }
+            }
+            mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+            mp.prepareAsync()
         } catch (_: Exception) {
+            try { afd?.close() } catch (_: Exception) {}
             playSystemBeep()
         }
     }
@@ -325,8 +463,9 @@ class OverlayActivity : ComponentActivity() {
     }
 
     private fun vibrate() {
+        val vib = vibrator ?: return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            vibrator.vibrate(VibrationEffect.createOneShot(200, VibrationEffect.DEFAULT_AMPLITUDE))
+            vib.vibrate(VibrationEffect.createOneShot(200, VibrationEffect.DEFAULT_AMPLITUDE))
         }
     }
 
@@ -342,16 +481,19 @@ class OverlayActivity : ComponentActivity() {
 @Composable
 fun OverlayContent(
     viewModel: OverlayViewModel,
-    isSubmittingToSew: State<Boolean> = remember { mutableStateOf(false) },
     onClose: () -> Unit,
     onBarcodeScanned: (String, String?) -> Unit,
     onInjectToSew: (String) -> Unit,
     onCopyToClipboard: (String) -> Unit,
+    onCopyToClipboardForSew: (String) -> Unit,
     onRetry: () -> Unit = {},
-    tapToFocusEnabled: Boolean = true,
-    autoFocusEnabled: Boolean = false,
-    sewCalibrated: Boolean = false,
-    autoImportSew: Boolean = false
+    tapToFocusEnabled: State<Boolean> = remember { mutableStateOf(true) },
+    autoFocusEnabled: State<Boolean> = remember { mutableStateOf(false) },
+    sewCalibrated: State<Boolean> = remember { mutableStateOf(false) },
+    autoImportSew: State<Boolean> = remember { mutableStateOf(false) },
+    hasCameraPermission: State<Boolean> = remember { mutableStateOf(true) },
+    permissionBlocked: State<Boolean> = remember { mutableStateOf(false) },
+    onOpenSettings: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsState()
     val isTimedOut by viewModel.isScanTimedOut.collectAsState()
@@ -366,25 +508,22 @@ fun OverlayContent(
     var focusSuccess by remember { mutableStateOf<Boolean?>(null) }
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
-    val isSubmitting by isSubmittingToSew
 
-    LaunchedEffect(state, autoFocusEnabled, cameraControl, previewView) {
-        if (!autoFocusEnabled) return@LaunchedEffect
+    LaunchedEffect(state, autoFocusEnabled.value, cameraControl, previewView) {
+        if (!autoFocusEnabled.value) return@LaunchedEffect
         if (state !is OverlayViewModel.OverlayState.Scanning) return@LaunchedEffect
         val control = cameraControl ?: return@LaunchedEffect
         val view = previewView ?: return@LaunchedEffect
         val factory = view.meteringPointFactory
-        val executor = ContextCompat.getMainExecutor(view.context)
         while (isActive) {
             val center = factory.createPoint(view.width / 2f, view.height / 2f)
             val action = FocusMeteringAction.Builder(
                 center,
                 FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE
             ).setAutoCancelDuration(3, TimeUnit.SECONDS).build()
-            val future = control.startFocusAndMetering(action)
-            future.addListener({
-                runCatching { future.get() }
-            }, executor)
+            // Fire-and-forget: the result is unused, and future.get() must never
+            // block the Main thread (ANR if the camera stalls).
+            control.startFocusAndMetering(action)
             delay(3000)
         }
     }
@@ -402,7 +541,7 @@ fun OverlayContent(
         }
         if (state is OverlayViewModel.OverlayState.Success) {
             val s = state as OverlayViewModel.OverlayState.Success
-            android.util.Log.d("ScanFlow", "LaunchedEffect: state=Success, barcode=${s.barcode}")
+            if (BuildConfig.DEBUG) android.util.Log.d("ScanFlow", "LaunchedEffect: state=Success, barcode=${s.barcode}")
         }
     }
 
@@ -424,9 +563,9 @@ fun OverlayContent(
                     .size(300.dp)
                     .clip(RoundedCornerShape(16.dp))
                     .border(1.dp, Color(0x1AFFFFFF), RoundedCornerShape(16.dp))
-                    .pointerInput(state, tapToFocusEnabled) {
+                    .pointerInput(state, tapToFocusEnabled.value) {
                         detectTapGestures { offset ->
-                            if (!tapToFocusEnabled) return@detectTapGestures
+                            if (!tapToFocusEnabled.value) return@detectTapGestures
                             if (state !is OverlayViewModel.OverlayState.Scanning) return@detectTapGestures
                             val control = cameraControl ?: return@detectTapGestures
                             val view = previewView ?: return@detectTapGestures
@@ -438,19 +577,28 @@ fun OverlayContent(
                             ).setAutoCancelDuration(3, TimeUnit.SECONDS).build()
                             focusSuccess = null
                             focusPoint = offset
-                            val executor = ContextCompat.getMainExecutor(view.context)
                             val future = control.startFocusAndMetering(action)
-                            future.addListener({
-                                runCatching { future.get() }.onSuccess { result ->
-                                    focusSuccess = result.isFocusSuccessful
+                            coroutineScope.launch {
+                                // Blocking get() goes to IO with a timeout:
+                                // never stall Main on a hung camera.
+                                val success = withContext(Dispatchers.IO) {
+                                    runCatching { future.get(4, TimeUnit.SECONDS) }
+                                        .map { it.isFocusSuccessful }
+                                        .getOrNull()
                                 }
-                            }, executor)
+                                focusSuccess = success
+                            }
                         }
                     }
             ) {
+                    // Биндим камеру только с разрешением: иначе провайдер успевает
+                    // отработать до гранта → SecurityException → ложный экран ошибки.
+                    // Грант из лаунчера/onResume включает превью через рекомпозицию.
+                    if (hasCameraPermission.value) {
                     key(cameraInitAttempt) {
-                        CameraPreview(
-                            torchOn = torchOn,
+                    CameraPreview(
+                        torchOn = torchOn,
+                        onCopyToClipboard = onCopyToClipboardForSew,
                             onCameraReady = { control, view ->
                                 cameraControl = control
                                 previewView = view
@@ -459,6 +607,9 @@ fun OverlayContent(
                             onCameraError = { e ->
                                 android.util.Log.e("OverlayActivity", "Camera init failed", e)
                                 viewModel.onCameraError()
+                            },
+                            onScanError = {
+                                viewModel.onScanError()
                             },
                             onBarcodeScanned = { result ->
                                 coroutineScope.launch {
@@ -472,8 +623,11 @@ fun OverlayContent(
                                             null
                                         }
                                         val product = if (articleCode != null) {
-                                            ArticleBarcodeDatabase.init(context)
-                                            ArticleBarcodeDatabase.searchByArticleCode(articleCode)
+                                            // init читает JSON с диска — только в IO, иначе I/O на Main при первом скане
+                                            withContext(Dispatchers.IO) {
+                                                ArticleBarcodeDatabase.init(context.applicationContext)
+                                                ArticleBarcodeDatabase.searchByArticleCode(articleCode)
+                                            }
                                         } else null
                                         val resolvedBarcode = when {
                                             product != null -> product.barcode
@@ -482,7 +636,9 @@ fun OverlayContent(
                                         }
                                         onBarcodeScanned(resolvedBarcode, product?.name)
                                         val resolvedResult = ScannerResult.Success(resolvedBarcode, result.format)
-                                        if (sewCalibrated && autoImportSew) {
+                                        if (sewCalibrated.value && autoImportSew.value) {
+                                            // Копируем БЕЗ finish: triggerSewAutoInput финиширует один раз сам.
+                                            // Иначе инжект стартует из умирающей Activity, а колбэк результата теряется.
                                             onCopyToClipboard(resolvedBarcode)
                                             onInjectToSew(resolvedBarcode)
                                         } else {
@@ -504,6 +660,7 @@ fun OverlayContent(
                             resetScanCompleted = state is OverlayViewModel.OverlayState.Scanning,
                             modifier = Modifier.fillMaxSize()
                         )
+                    }
                     }
 
                     // Loading overlay (shown while camera initializing)
@@ -618,7 +775,7 @@ fun OverlayContent(
 
         // Full-screen overlays for non-scanning states
         when {
-            isSubmitting -> {
+            permissionBlocked.value -> {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -630,20 +787,28 @@ fun OverlayContent(
                         modifier = Modifier
                             .background(Color(0x1AFFFFFF), RoundedCornerShape(24.dp))
                             .border(0.5.dp, Color(0x14FFFFFF), RoundedCornerShape(24.dp))
-                            .padding(horizontal = 40.dp, vertical = 32.dp)
+                            .padding(horizontal = 32.dp, vertical = 28.dp)
                     ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(48.dp),
-                            color = Color(0xFF4CAF50),
-                            strokeWidth = 3.dp
-                        )
-                        Spacer(Modifier.height(16.dp))
                         Text(
-                            "Ввод в SEW…",
+                            "Нет доступа к камере",
                             fontWeight = FontWeight.Bold,
                             fontSize = 18.sp,
                             color = Color.White
                         )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Разрешение отклонено навсегда.\nВключите камеру в настройках.",
+                            fontSize = 14.sp,
+                            color = Color(0xCCFFFFFF)
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        Button(onClick = onOpenSettings) {
+                            Text("Открыть настройки")
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        TextButton(onClick = onClose) {
+                            Text("Закрыть", color = Color(0x99FFFFFF))
+                        }
                     }
                 }
             }
@@ -777,13 +942,22 @@ fun OverlayContent(
     }
 }
 
+/**
+ * Сколько кадров подряд должно отдать ошибку, прежде чем мы покажем экран ошибки.
+ * Один сбой (image == null на переходе, гонка с перезапуском камеры) — обычное дело
+ * и не должен прерывать сканирование.
+ */
+private const val SCAN_ERROR_STREAK_THRESHOLD = 5
+
 @Composable
 fun CameraPreview(
     torchOn: Boolean = false,
     onBarcodeScanned: (ScannerResult.Success) -> Unit,
+    onCopyToClipboard: (String) -> Unit,
     resetScanCompleted: Boolean = false,
     onCameraReady: (CameraControl, PreviewView) -> Unit = { _, _ -> },
     onCameraError: (Exception) -> Unit = {},
+    onScanError: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -791,6 +965,7 @@ fun CameraPreview(
 
     val cameraControl = remember { mutableStateOf<CameraControl?>(null) }
     val scanCompleted = remember { AtomicBoolean(false) }
+    val scanErrorStreak = remember { java.util.concurrent.atomic.AtomicInteger(0) }
     val cameraFrameHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
     val scannerRef = remember { mutableStateOf<BarcodeAnalyzer?>(null) }
     val previewUseCase = remember { mutableStateOf<Preview?>(null) }
@@ -799,6 +974,7 @@ fun CameraPreview(
     LaunchedEffect(resetScanCompleted) {
         if (resetScanCompleted) {
             scanCompleted.set(false)
+            scanErrorStreak.set(0)
             scannerRef.value?.reset()
         }
     }
@@ -806,15 +982,11 @@ fun CameraPreview(
     val analyzerExecutor = remember { java.util.concurrent.Executors.newSingleThreadScheduledExecutor() }
     val isActive = remember { AtomicBoolean(true) }
 
-    LaunchedEffect(torchOn, cameraControl.value) {
-        try {
-            cameraControl.value?.enableTorch(torchOn)
-        } catch (_: Exception) {}
-    }
-
-    DisposableEffect(lifecycleOwner) {
-        val cleanedUp = java.util.concurrent.atomic.AtomicBoolean(false)
-        fun releaseCamera() {
+    // Живёт на уровне композабла, а не внутри DisposableEffect: её зовёт и onDispose,
+    // и catch в AndroidView-фабрике (bindToLifecycle failed) — разные области видимости.
+    val cleanedUp = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+    val releaseCamera: () -> Unit = remember {
+        fun() {
             if (!cleanedUp.compareAndSet(false, true)) return
             try {
                 val provider = cameraProviderRef.value
@@ -830,16 +1002,41 @@ fun CameraPreview(
             cameraProviderRef.value = null
             previewUseCase.value = null
             analysisUseCase.value = null
-            analyzerExecutor.shutdownNow()
-            scannerRef.value?.close()
+            // Порядок важен: BarcodeAnalyzer закрывает ImageProxy в колбэке, висящем на
+            // ПРЯМОМ executor'е (не на закрываемом), поэтому шутдаун executor'а не может помешать
+            // отработать close(). Раньше здесь стоял отдельный executor для колбэков MLKit, и
+            // его shutdown() в момент onDestroy ронял процесс: задачи, уже отправленные в MLKit,
+            // доживали до закрытия executor'а, а play-services-tasks 18.1.0 не глушит отказ
+            // RejectedExecutionException, а пробрасывает его в поток, регистрировавший
+            // слушателя (главный) -> падение приложения при закрытии сканера.
+            // Теоретически shutdownNow() здесь и не нужен: выше уже вызван provider.unbind(),
+            // который снимает use-case и освобождает кадры.
+            val scanner = scannerRef.value
             scannerRef.value = null
+            scanner?.close()
+            analyzerExecutor.shutdownNow()
         }
+    }
+
+    LaunchedEffect(torchOn, cameraControl.value) {
+        try {
+            cameraControl.value?.enableTorch(torchOn)
+        } catch (_: Exception) {}
+    }
+
+    DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_DESTROY) releaseCamera()
+            if (event == Lifecycle.Event.ON_DESTROY) {
+                // Mark inactive immediately: a bind delayed by CameraBinding's cooldown
+                // must not run against a destroyed lifecycle (it would throw and leak).
+                isActive.set(false)
+                releaseCamera()
+            }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             isActive.set(false)
+            cameraFrameHandler.removeCallbacksAndMessages(null)
             lifecycleOwner.lifecycle.removeObserver(observer)
             releaseCamera()
         }
@@ -882,16 +1079,40 @@ fun CameraPreview(
                             .build()
                         val scanQrCodePref = ctx.getSharedPreferences("scanner_prefs", android.content.Context.MODE_PRIVATE)
                             .getBoolean("scan_qr_code", true)
+                        scanErrorStreak.set(0)
                         imageAnalysis.setAnalyzer(
                             analyzerExecutor,
                             BarcodeAnalyzer(
                                 scanQrCode = scanQrCodePref,
-                                executor = analyzerExecutor,
                                 onResult = { result ->
                                     cameraFrameHandler.post {
                                         try {
-                                            if (result is ScannerResult.Success && scanCompleted.compareAndSet(false, true)) {
-                                                onBarcodeScanned(result)
+                                            when (result) {
+                                                is ScannerResult.Success -> {
+                                                    scanErrorStreak.set(0)
+                                                    if (scanCompleted.compareAndSet(false, true)) {
+                                                        onBarcodeScanned(result)
+                                                    }
+                                                }
+                                                is ScannerResult.Error -> {
+                                                    // Одиночный сбой кадра (image == null на
+                                                    // переходе) — обычное дело, экран не трогаем.
+                                                    // Реальная поломка MLKit выглядит как серия
+                                                    // сбоев подряд: без этого счётчика ошибка
+                                                    // молча терялась, и пользователь 45 секунд
+                                                    // видел «наведите на код», а потом — таймаут
+                                                    // без причины.
+                                                    if (scanErrorStreak.incrementAndGet() >= SCAN_ERROR_STREAK_THRESHOLD &&
+                                                        !scanCompleted.get()
+                                                    ) {
+                                                        android.util.Log.e(
+                                                            "CameraPreview",
+                                                            "scanner failed ${scanErrorStreak.get()} frames in a row: ${result.message}"
+                                                        )
+                                                        scanCompleted.set(true)
+                                                        onScanError()
+                                                    }
+                                                }
                                             }
                                         } catch (e: Exception) {
                                             android.util.Log.e("CameraPreview", "handler crash", e)
@@ -913,7 +1134,15 @@ fun CameraPreview(
                         onCameraReady(camera.cameraControl, previewView)
                     } catch (e: Exception) {
                         android.util.Log.e("CameraPreview", "bindToLifecycle failed", e)
-                        CameraBinding.forceReset(cameraProviderRef.value)
+                        // Free the analyzer thread + MLKit scanner right away instead of
+                        // keeping them alive while the error screen is shown.
+                        // Провайдера читаем ДО releaseCamera(): тот обнуляет
+                        // cameraProviderRef, и forceReset() получил бы null — то есть
+                        // unbindAll() не выполнился бы, а залипшие use-case'ы остались
+                        // бы на провайдере до перезапуска процесса.
+                        val providerForReset = cameraProviderRef.value
+                        releaseCamera()
+                        CameraBinding.forceReset(providerForReset)
                         onCameraError(e)
                     }
                 }

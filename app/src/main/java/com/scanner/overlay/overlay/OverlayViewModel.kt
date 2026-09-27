@@ -58,6 +58,7 @@ class OverlayViewModel @Inject constructor(
     }
 
     fun onCameraError() {
+        timeoutJob?.cancel()
         _isCameraError.value = true
         _state.value = OverlayState.Error
     }
@@ -77,7 +78,7 @@ class OverlayViewModel @Inject constructor(
 
     private fun startTimeout() {
         timeoutJob?.cancel()
-        val timeoutMs = prefs.getLong("scan_timeout_ms", 45_000L)
+        val timeoutMs = prefs.getLong("scan_timeout_ms", 45_000L).coerceAtLeast(1)
         timeoutJob = viewModelScope.launch {
             delay(timeoutMs)
             _isScanTimedOut.value = true

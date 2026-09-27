@@ -47,6 +47,7 @@ import com.google.mlkit.vision.barcode.BarcodeScanner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import com.scanner.overlay.overlay.CameraBinding
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -154,6 +155,12 @@ private fun QrCameraView(
             val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
             cameraProviderFuture.addListener({
                 if (!isActive.get()) return@addListener
+                // ProcessCameraProvider is a process-wide singleton shared with OverlayActivity.
+                // Bypass the cooldown and a bind can land inside an in-flight native release
+                // from another session, which silently yields a black preview.
+                val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+                CameraBinding.runWhenCameraFree(mainHandler) {
+                if (!isActive.get()) return@runWhenCameraFree
                 try {
                     val cameraProvider = cameraProviderFuture.get()
                     cameraProviderRef.value = cameraProvider
@@ -186,6 +193,11 @@ private fun QrCameraView(
                     )
                 } catch (e: Exception) {
                     android.util.Log.e("QrCameraView", "Camera init failed", e)
+                    // A failed bind may leave use-cases partially attached to the shared
+                    // provider; clear them so the next session starts from a clean state.
+                    CameraBinding.forceReset(cameraProviderRef.value)
+                    cameraProviderRef.value = null
+                }
                 }
             }, ContextCompat.getMainExecutor(ctx))
 
@@ -198,7 +210,9 @@ private fun QrCameraView(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_DESTROY) {
                 isActive.set(false)
-                cameraProviderRef.value?.unbindAll()
+                // forceReset also records the release so the next session respects the cooldown.
+                CameraBinding.forceReset(cameraProviderRef.value)
+                cameraProviderRef.value = null
                 scannerRef.value?.close()
                 analyzerExecutor.shutdownNow()
             }
@@ -207,7 +221,8 @@ private fun QrCameraView(
         onDispose {
             isActive.set(false)
             lifecycleOwner.lifecycle.removeObserver(observer)
-            cameraProviderRef.value?.unbindAll()
+            CameraBinding.forceReset(cameraProviderRef.value)
+            cameraProviderRef.value = null
             scannerRef.value?.close()
             analyzerExecutor.shutdownNow()
         }
@@ -227,21 +242,27 @@ private fun scanQrImage(
     }
     val mediaImage = imageProxy.image
     if (mediaImage != null) {
-        val inputImage = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-        scanner.process(inputImage)
-            .addOnSuccessListener { barcodes ->
-                for (barcode in barcodes) {
-                    barcode.rawValue?.let { value ->
-                        if (detected.compareAndSet(false, true)) {
-                            onQrDetected(value)
+        try {
+            val inputImage = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+            scanner.process(inputImage)
+                .addOnSuccessListener { barcodes ->
+                    for (barcode in barcodes) {
+                        barcode.rawValue?.let { value ->
+                            if (detected.compareAndSet(false, true)) {
+                                onQrDetected(value)
+                            }
+                            return@addOnSuccessListener
                         }
-                        return@addOnSuccessListener
                     }
                 }
-            }
-            .addOnCompleteListener {
-                imageProxy.close()
-            }
+                .addOnCompleteListener {
+                    imageProxy.close()
+                }
+        } catch (_: Exception) {
+            // close() живёт только в addOnCompleteListener: если process() бросил, Task не
+            // завершится и кадр не вернётся в буфер камеры. Как в BarcodeAnalyzer.analyze().
+            imageProxy.close()
+        }
     } else {
         imageProxy.close()
     }
@@ -255,6 +276,7 @@ private fun ScanFrameOverlay() {
     val frameStrokeWidth = 6.dp
     val cornerRadius = 12.dp
     val hintColor = Color.White
+    val density = androidx.compose.ui.platform.LocalDensity.current
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -297,10 +319,15 @@ private fun ScanFrameOverlay() {
         }
 
         // Hint text centered horizontally, shifted down to sit just below the frame.
+        // constraints здесь в px (DrawScope), поэтому конвертируем px -> Dp, а не трактуем как dp.
         Text(
             text = "Поместите QR-код в рамку",
             color = hintColor,
-            modifier = Modifier.offset(y = ((minOf(constraints.minWidth, constraints.minHeight)) * boxFraction / 2f).dp)
+            modifier = Modifier.offset(
+                y = with(density) {
+                    (minOf(constraints.minWidth, constraints.minHeight) * boxFraction / 2f).toDp()
+                }
+            )
         )
     }
 }

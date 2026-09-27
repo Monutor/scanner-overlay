@@ -1,6 +1,7 @@
 package com.scanner.overlay.overlay
 
 import android.os.Handler
+import android.os.SystemClock
 import androidx.camera.lifecycle.ProcessCameraProvider
 import java.util.concurrent.atomic.AtomicLong
 
@@ -26,7 +27,7 @@ object CameraBinding {
 
     /** Record that the camera was just released so the next bind waits for native release. */
     fun recordReleased() {
-        lastReleaseMs.set(System.currentTimeMillis())
+        lastReleaseMs.set(SystemClock.elapsedRealtime())
     }
 
     /**
@@ -34,7 +35,7 @@ object CameraBinding {
      * Non-blocking: if a cooldown is still pending, schedules [action] via [handler].
      */
     fun runWhenCameraFree(handler: Handler, action: () -> Unit) {
-        val since = System.currentTimeMillis() - lastReleaseMs.get()
+        val since = SystemClock.elapsedRealtime() - lastReleaseMs.get()
         if (since >= RELEASE_COOLDOWN_MS) {
             action()
         } else {

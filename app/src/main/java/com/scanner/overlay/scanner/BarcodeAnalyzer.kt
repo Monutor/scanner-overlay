@@ -8,18 +8,38 @@ import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import com.scanner.overlay.BuildConfig
-import java.util.concurrent.ScheduledExecutorService
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.Executor
 
 class BarcodeAnalyzer(
     private val maxCenterDistanceFraction: Float = 0.18f,
     private val cooldownMs: Long = 2000L,
     private val startupDelayMs: Long = 1500L,
     private val scanQrCode: Boolean = true,
-    private val executor: ScheduledExecutorService,
     private val onResult: (ScannerResult) -> Unit
 ) : ImageAnalysis.Analyzer {
-    private val createdAt = System.currentTimeMillis()
+    // Монотонные часы: System.currentTimeMillis() прыгает при синхронизации времени,
+    // и тогда elapsed становился отрицательным, а условие "прошло ли время запуска"
+    // выполнялось для каждого кадра — сканер молча переставал видеть штрихкоды.
+    private val createdAt = android.os.SystemClock.elapsedRealtime()
+
+    /**
+     * Колбэки MLKit выполняются напрямую на потоке, завершившем задачу, и НИКОГДА не через
+     * закрываемый executor.
+     *
+     * Раньше здесь был `Executors.newSingleThreadScheduledExecutor()`, который `releaseCamera()`
+     * закрывал в `shutdown()` в момент `onDestroy`. Задачи, уже отправленные в MLKit, при этом
+     * доживали до закрытия executor'а: `play-services-tasks` 18.1.0 **не глушит** отказ
+     * `RejectedExecutionException`, а пробрасывает его в поток, который регистрировал
+     * слушателя (главный), и процесс падал. Это подтверждено стектрейсом из dropbox:
+     * `ScheduledThreadPoolExecutor.delayedExecute -> RejectedExecutionException ->
+     * gms.tasks.zzn.zzd -> Handler.handleCallback -> ActivityThread.main`.
+     *
+     * Прямой executor не может быть Terminated, поэтому отказ невозможен в принципе, а
+     * `imageProxy.close()` идёт сразу после завершения задачи - без очереди, вставленной
+     * десятками кадров, из-за которой STRATEGY_KEEP_ONLY_LATEST выбрасывал кадры.
+     */
+    private val callbackExecutor = Executor { it.run() }
+
     private val scanner = BarcodeScanning.getClient(
         BarcodeScannerOptions.Builder()
             .setBarcodeFormats(
@@ -48,12 +68,15 @@ class BarcodeAnalyzer(
     override fun analyze(imageProxy: ImageProxy) {
         val mediaImage = imageProxy.image
         if (mediaImage == null) {
-            onResult(ScannerResult.Error("No image from camera"))
+            // A frame without an Image is routine while CameraX tears down or re-binds, and it
+            // arrives once per frame. Reporting it through onResult used to fill the error
+            // streak instantly and show a bogus "camera error" to the user.
+            if (BuildConfig.DEBUG) android.util.Log.w("BarcodeAnalyzer", "analyze: frame without image")
             imageProxy.close()
             return
         }
 
-        val elapsed = System.currentTimeMillis() - createdAt
+        val elapsed = android.os.SystemClock.elapsedRealtime() - createdAt
         if (elapsed < startupDelayMs) {
             imageProxy.close()
             return
@@ -64,11 +87,21 @@ class BarcodeAnalyzer(
         val imgH = imageProxy.height
         if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "analyze frame: ${imgW}x${imgH} rot=$rotation")
 
+        // Флаг для catch: если колбэк close() уже зарегистрирован, повторно закрывать прокси
+        // нельзя - лишний close() на уже освобождённом буфере бросает из ImageReader.
+        var closeRegistered = false
         try {
             val inputImage = InputImage.fromMediaImage(mediaImage, rotation)
 
             scanner.process(inputImage)
-                .addOnSuccessListener { barcodes ->
+                // Порядок важен: close() вешаем ПЕРВЫМ. Если бы регистрация success/failure
+                // бросила исключение, цепочка оборвалась бы до close и буфер ImageReader
+                // не вернулся бы никогда (с каждым кадром пул кадров исчерпывается).
+                .addOnCompleteListener(callbackExecutor) {
+                    imageProxy.close()
+                }
+                .also { closeRegistered = true }
+                .addOnSuccessListener(callbackExecutor) { barcodes ->
                     if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "MLKit detected ${barcodes.size} barcode(s)")
                     if (barcodes.isNotEmpty()) {
                         val isRotated = rotation == 90 || rotation == 270
@@ -121,34 +154,33 @@ class BarcodeAnalyzer(
                         handleBarcode(value, centerBarcode.format)
                     }
                 }
-                .addOnFailureListener { e ->
+                .addOnFailureListener(callbackExecutor) { e ->
                     android.util.Log.e("BarcodeAnalyzer", "MLKit failed: ${e.message}", e)
                     onResult(ScannerResult.Error("MLKit: ${e.message}"))
-                }
-                .addOnCompleteListener {
-                    imageProxy.close()
                 }
         } catch (e: Exception) {
             android.util.Log.e("BarcodeAnalyzer", "analyze exception", e)
             onResult(ScannerResult.Error("analyze: ${e.message}"))
-            imageProxy.close()
+            if (!closeRegistered) imageProxy.close()
         }
     }
 
     private fun handleBarcode(value: String, format: Int) {
-        val now = System.currentTimeMillis()
+        val now = android.os.SystemClock.elapsedRealtime()
+        // The check and the commit must share one critical section: reset() runs on the main
+        // thread ("Повторить"), so a window between two separate synchronized blocks let
+        // reset() clear the state and then handleBarcode wrote lastScannedCode/scannedCodes
+        // back - the repeat button silently failed to lift the cooldown.
         synchronized(scanLock) {
             if (value == lastScannedCode && now - lastScanTime < cooldownMs) {
                 if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "rejected cooldown: $value")
                 return
             }
-        }
-        if (scannedCodes.contains(value)) {
-            if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "rejected duplicate: $value")
-            return
-        }
-        addScannedCode(value)
-        synchronized(scanLock) {
+            if (scannedCodes.contains(value)) {
+                if (BuildConfig.DEBUG) android.util.Log.d("BarcodeAnalyzer", "rejected duplicate: $value")
+                return
+            }
+            addScannedCode(value)
             lastScannedCode = value
             lastScanTime = now
         }
@@ -166,8 +198,9 @@ class BarcodeAnalyzer(
     fun reset() {
         synchronized(scanLock) {
             lastScannedCode = null
+            lastScanTime = 0L
+            scannedCodes.clear()
         }
-        scannedCodes.clear()
     }
 
     fun close() {

@@ -41,6 +41,7 @@
             android:exported="false"
             android:excludeFromRecents="true"
             android:taskAffinity=""
+            android:launchMode="singleTask"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
             android:screenOrientation="portrait"
@@ -80,12 +81,20 @@
         <service
             android:name=".service.ScannerForegroundService"
             android:exported="false"
-            android:foregroundServiceType="specialUse" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Floating scanner control panel displayed over other apps" />
+        </service>
 
         <service
             android:name=".service.SewCalibrationService"
             android:exported="false"
-            android:foregroundServiceType="specialUse" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Full-screen overlay for SEW tap-coordinate calibration" />
+        </service>
 
         <service
             android:name=".accessibility.ScannerAccessibilityService"
