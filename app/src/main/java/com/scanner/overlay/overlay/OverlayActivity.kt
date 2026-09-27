@@ -271,11 +271,10 @@ class OverlayActivity : ComponentActivity() {
             val viewModel = hiltViewModel<OverlayViewModel>()
             overlayViewModel = viewModel
             MaterialTheme {
-                // Surface по умолчанию красит непрозрачный colorScheme.background, чем
-                // полностью отменял Theme.ScannerOverlay.Transparent: сквозь оверлей было
-                // не видно ничего, и расчётный полупрозрачный скрим 0xE6000000 ниже
-                // становился бессмысленным (он и так рассчитан на 90 % затемнения).
-                Surface(modifier = Modifier.fillMaxSize(), color = Color.Transparent) {
+                // Оверлей непрозрачный намеренно: при 90 % затемнения сквозь него
+                // читались заголовки и тумблеры приложения под ним, а экран нужен
+                // для одной рамки наведения. Проверено на устройстве (v1.21.0).
+                Surface(modifier = Modifier.fillMaxSize()) {
                     OverlayContent(
                         viewModel = viewModel,
                         onClose = { finish() },
@@ -548,7 +547,9 @@ fun OverlayContent(
     Box(
         modifier = Modifier.fillMaxSize()
     ) {
-        // Dark background around camera
+        // Тёмная подложка вокруг камеры. Не «полупрозрачность»: Surface выше
+        // непрозрачный, и без этого блока подложкой был бы светлый
+        // colorScheme.background темы.
         Box(Modifier.fillMaxSize().background(Color(0xE6000000)))
 
         // Centered Column with camera + scanning text/buttons
