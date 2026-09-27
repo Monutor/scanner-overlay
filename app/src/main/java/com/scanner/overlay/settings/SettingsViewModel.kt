@@ -469,14 +469,19 @@ class SettingsViewModel @Inject constructor(
             inProgress = true,
             finished = false
         )
-        val countdownToast = reusableBottomToast(app)
+        val countdownToast = reusableBottomToast(app, "Старт через $COUNTDOWN_SECONDS сек")
         viewModelScope.launch {
-            for (i in COUNTDOWN_SECONDS downTo 1) {
-                countdownToast.setText("Старт через $i сек")
+            try {
+                for (i in COUNTDOWN_SECONDS downTo 1) {
+                    countdownToast.setText("Старт через $i сек")
+                    countdownToast.cancel()
+                    countdownToast.show()
+                    kotlinx.coroutines.delay(1000L)
+                    if (!_sewTestResult.value.inProgress) return@launch
+                }
+            } finally {
+                // "Старт через 1 сек" must not stay on top of the screen while the test runs.
                 countdownToast.cancel()
-                countdownToast.show()
-                kotlinx.coroutines.delay(1000L)
-                if (!_sewTestResult.value.inProgress) return@launch
             }
             service.runSewAutoInput(
                 barcode = "TEST_CALIBRATION",
@@ -486,7 +491,9 @@ class SettingsViewModel @Inject constructor(
                     val current = _sewTestResult.value
                     val updated = current.steps.mapIndexed { i, s ->
                         if (s.message == "Ожидание..." && !s.ok) {
-                            s.copy(ok = ok && i == current.steps.lastIndex, message = if (ok) null else message)
+                            // При успехе помечаем все ожидающие шаги как пройденные;
+                            // при провале — оставляем ok=false с сообщением об ошибке.
+                            s.copy(ok = ok, message = if (ok) null else message)
                         } else s
                     }
                     _sewTestResult.value = current.copy(
@@ -578,6 +585,12 @@ class SettingsViewModel @Inject constructor(
                 _updateState.value = UpdateUiState.Error(
                     result.exceptionOrNull()?.message ?: "Ошибка скачивания"
                 )
+            } else {
+                // The APK is handed to the system installer, which is a separate task: when the
+                // user cancels it we return here still on "Скачивание…", and the guard at the
+                // top of this function blocks every further attempt. Return to Available so the
+                // "Установить" button stays usable.
+                _updateState.value = UpdateUiState.Available(info)
             }
         }
     }
@@ -600,7 +613,8 @@ class SettingsViewModel @Inject constructor(
                     return@launch
                 }
 
-                val prefs = app.getSharedPreferences("scanner_prefs", 0)
+                // Use the injected prefs instead of re-opening the file by name: a rename of
+                // the preferences file in AppModule would silently split this value off.
                 val localSha = prefs.getString("external_db_sha", "") ?: ""
 
                 if (remoteSha == localSha) {
@@ -619,14 +633,25 @@ class SettingsViewModel @Inject constructor(
                 }
 
                 val existingCodes = ArticleBarcodeDatabase.getAllItems().map { it.articleCode }.toSet()
-                ArticleBarcodeDatabase.reset()
-                ArticleBarcodeDatabase.loadFromExternalJson(json)
+                val applied = ArticleBarcodeDatabase.loadFromExternalJson(json)
+                if (!applied) {
+                    withContext(Dispatchers.Main) {
+                        _dbManagerState.value = DbManagerState.Error("Битый файл базы товаров: оставлены прежние данные")
+                    }
+                    return@launch
+                }
                 ArticleBarcodeDatabase.saveToCache(app)
                 prefs.edit().putString("external_db_sha", remoteSha).apply()
                 val newItems = ArticleBarcodeDatabase.getAllItems().filter { it.articleCode !in existingCodes }
 
                 withContext(Dispatchers.Main) {
                     _dbManagerState.value = DbManagerState.Applied(newItems.size, "синхронизация", newItems.take(50))
+                }
+            } catch (e: OutOfMemoryError) {
+                // db.json is parsed into a JSONObject in memory; Exception does not
+                // cover Error, so a huge remote file used to kill the process.
+                withContext(Dispatchers.Main) {
+                    _dbManagerState.value = DbManagerState.Error("Не хватило памяти для разбора базы товаров")
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
@@ -651,9 +676,10 @@ class SettingsViewModel @Inject constructor(
             try {
                 val json = GithubDatabaseManager.downloadExternalDbJson()
                 if (json != null && json != "[]") {
-                    ArticleBarcodeDatabase.reset()
-                    ArticleBarcodeDatabase.loadFromExternalJson(json)
-                    ArticleBarcodeDatabase.saveToCache(app)
+                    val applied = ArticleBarcodeDatabase.loadFromExternalJson(json)
+                    if (applied) {
+                        ArticleBarcodeDatabase.saveToCache(app)
+                    }
                     withContext(Dispatchers.Main) {
                         _viewProducts.value = ArticleBarcodeDatabase.getAllItems()
                     }
@@ -662,6 +688,11 @@ class SettingsViewModel @Inject constructor(
                     withContext(Dispatchers.Main) {
                         _viewProducts.value = if (local.isNotEmpty()) local else emptyList()
                     }
+                }
+            } catch (_: OutOfMemoryError) {
+                val local = ArticleBarcodeDatabase.getAllItems()
+                withContext(Dispatchers.Main) {
+                    _viewProducts.value = if (local.isNotEmpty()) local else emptyList()
                 }
             } catch (_: Exception) {
                 val local = ArticleBarcodeDatabase.getAllItems()

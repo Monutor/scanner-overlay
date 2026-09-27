@@ -471,6 +471,7 @@ private fun BtnSizeSlider(
     btnSize: Int,
     onBtnSizeChange: (Int) -> Unit
 ) {
+    var displayBtnSize by remember { mutableStateOf(btnSize) }
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
         Text(
             text = "Размер кнопок",
@@ -484,8 +485,9 @@ private fun BtnSizeSlider(
         ) {
             Text("36", style = MaterialTheme.typography.labelSmall)
             Slider(
-                value = btnSize.toFloat(),
-                onValueChange = { onBtnSizeChange(it.toInt()) },
+                value = displayBtnSize.toFloat(),
+                onValueChange = { displayBtnSize = it.toInt() },
+                onValueChangeFinished = { onBtnSizeChange(displayBtnSize.toInt()) },
                 valueRange = 36f..70f,
                 steps = 33,
                 modifier = Modifier
@@ -495,7 +497,7 @@ private fun BtnSizeSlider(
             Text("70", style = MaterialTheme.typography.labelSmall)
         }
         Text(
-            text = "${btnSize}dp",
+            text = "${displayBtnSize}dp",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.fillMaxWidth(),
@@ -509,6 +511,7 @@ private fun OpacitySlider(
     opacity: Float,
     onOpacityChange: (Float) -> Unit
 ) {
+    var displayOpacity by remember { mutableStateOf(opacity) }
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
         Text(
             text = "Прозрачность панели",
@@ -522,8 +525,9 @@ private fun OpacitySlider(
         ) {
             Text("30%", style = MaterialTheme.typography.labelSmall)
             Slider(
-                value = opacity,
-                onValueChange = { onOpacityChange(it) },
+                value = displayOpacity,
+                onValueChange = { displayOpacity = it },
+                onValueChangeFinished = { onOpacityChange(displayOpacity) },
                 valueRange = 0.15f..1f,
                 steps = 16,
                 modifier = Modifier
@@ -533,7 +537,7 @@ private fun OpacitySlider(
             Text("100%", style = MaterialTheme.typography.labelSmall)
         }
         Text(
-            text = "${(opacity * 100).toInt()}%",
+            text = "${(displayOpacity * 100).toInt()}%",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.fillMaxWidth(),
@@ -1587,10 +1591,16 @@ private fun RestartProcessCard() {
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                 Button(
                     onClick = {
-                        val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
-                        intent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                        context.startActivity(intent!!)
-                        Runtime.getRuntime().exit(0)
+                        val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                        }
+                        if (intent != null) {
+                            context.startActivity(intent)
+                            // Не вызываем Runtime.exit(0): жёсткое убийство процесса прерывает флуш
+                            // SharedPreferences.apply() и теряет сохранённые настройки. Задачу закрываем через
+                            // finishAffinity — процесс остаётся жив, настройки сохраняются, приложение перезапускается из launcher.
+                            (context as? android.app.Activity)?.finishAffinity()
+                        }
                     },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error

@@ -27,21 +27,28 @@ class FavoritesStore @Inject constructor(
     }
 
     fun toggle(barcode: String): Boolean {
-        val current = readOrder()
-        val newList = if (barcode in current) {
-            current - barcode
-        } else {
-            val prepended = listOf(barcode) + current.filter { it != barcode }
-            prepended.take(MAX_FAVORITES)
+        // readOrder() + writeOrder() are a read-modify-write on the same key: holding one lock
+        // keeps two concurrent toggles (fast double tap, recomposition during a click) from
+        // writing the same stale list and losing a change.
+        synchronized(prefs) {
+            val current = readOrder()
+            val newList = if (barcode in current) {
+                current - barcode
+            } else {
+                val prepended = listOf(barcode) + current.filter { it != barcode }
+                prepended.take(MAX_FAVORITES)
+            }
+            writeOrder(newList)
+            return barcode in newList
         }
-        writeOrder(newList)
-        return barcode in newList
     }
 
     fun remove(barcode: String) {
-        val current = readOrder()
-        if (barcode !in current) return
-        writeOrder(current - barcode)
+        synchronized(prefs) {
+            val current = readOrder()
+            if (barcode !in current) return
+            writeOrder(current - barcode)
+        }
     }
 
     private fun readOrder(): List<String> {

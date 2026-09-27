@@ -15,31 +15,42 @@ data class ScanHistoryEntry(
 
         fun load(prefs: SharedPreferences): List<ScanHistoryEntry> {
             val json = prefs.getString(PREF_KEY, null) ?: return emptyList()
+            val list = mutableListOf<ScanHistoryEntry>()
             try {
                 val arr = JSONArray(json)
-                val list = mutableListOf<ScanHistoryEntry>()
                 for (i in 0 until arr.length()) {
-                    val obj = arr.getJSONObject(i)
-                    list.add(ScanHistoryEntry(
-                        barcode = obj.getString("b"),
-                        timestamp = obj.getLong("t"),
-                        productName = if (obj.has("n")) obj.getString("n") else null
-                    ))
+                    try {
+                        val obj = arr.getJSONObject(i)
+                        list.add(ScanHistoryEntry(
+                            barcode = obj.getString("b"),
+                            timestamp = obj.getLong("t"),
+                            productName = if (obj.has("n")) obj.getString("n") else null
+                        ))
+                    } catch (_: Exception) {
+                        // Пропускаем битую запись, не сносим всю историю целиком.
+                    }
                 }
-                return list.sortedByDescending { it.timestamp }
-            } catch (e: Exception) {
-                return emptyList()
+            } catch (_: Exception) {
+                // Массив распарсился частично — возвращаем то, что удалось прочитать.
             }
+            return list.sortedByDescending { it.timestamp }
         }
 
         fun add(prefs: SharedPreferences, barcode: String, productName: String? = null) {
-            val entries = load(prefs).toMutableList()
-            entries.add(0, ScanHistoryEntry(barcode, System.currentTimeMillis(), productName))
-            save(prefs, entries.take(MAX_SIZE))
+            // Load and save must share one critical section: a read-modify-write across two
+            // calls lets a concurrent writer (another scan, or the clear button) silently drop
+            // entries. The lock is per SharedPreferences instance, so unrelated keys are unaffected.
+            synchronized(prefs) {
+                val entries = load(prefs).toMutableList()
+                entries.add(0, ScanHistoryEntry(barcode, System.currentTimeMillis(), productName))
+                save(prefs, entries.take(MAX_SIZE))
+            }
         }
 
         fun clear(prefs: SharedPreferences) {
-            prefs.edit().remove(PREF_KEY).apply()
+            synchronized(prefs) {
+                prefs.edit().remove(PREF_KEY).apply()
+            }
         }
 
         private fun save(prefs: SharedPreferences, entries: List<ScanHistoryEntry>) {
