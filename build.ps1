@@ -45,9 +45,13 @@ switch ($args[0]) {
       exit 1
     }
 
+    # SHA-256 of the exact APK being uploaded
+    $sha256 = (Get-FileHash -Path $apkPath -Algorithm SHA256).Hash.ToLower()
+    Write-Host ("SHA-256: " + $sha256) -ForegroundColor Cyan
+
     # Create update.json with release notes
     $downloadUrl = "https://github.com/Monutor/scanner-overlay/releases/download/v" + $versionName + "/app-release.apk"
-    $json = "{`"versionCode`":$versionCode,`"versionName`":`"$versionName`",`"downloadUrl`":`"$downloadUrl`",`"releaseNotes`":`"Release $versionName`"}"
+    $json = "{`"versionCode`":$versionCode,`"versionName`":`"$versionName`",`"downloadUrl`":`"$downloadUrl`",`"sha256`":`"$sha256`",`"releaseNotes`":`"Release $versionName`"}"
     $bytes = [System.Text.Encoding]::ASCII.GetBytes($json)
     [System.IO.File]::WriteAllBytes((Resolve-Path ".").Path + "\update.json", $bytes)
 

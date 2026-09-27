@@ -1,5 +1,25 @@
 import java.util.Properties
 
+/**
+ * GitHub PAT from local.properties. Never committed (see .gitignore).
+ *
+ * SECURITY: the token is baked into BuildConfig only for the `debug` build type.
+ * A string constant inside BuildConfig is trivially extracted from an APK with jadx,
+ * and this app ships with write-capable publish helpers, so release builds must not
+ * carry it. Release publishes via the `gh` CLI, which keeps its own credentials,
+ * so nothing in the release flow depends on the baked token.
+ */
+val githubToken: String = run {
+    val propsFile = rootProject.file("local.properties")
+    if (!propsFile.exists()) {
+        ""
+    } else {
+        val p = Properties()
+        propsFile.reader().use { p.load(it) }
+        p.getProperty("github.token", "")
+    }
+}
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -16,16 +36,10 @@ android {
         applicationId = "com.scanner.overlay"
         minSdk = 26
         targetSdk = 36
-        versionCode = 31
-        versionName = "1.20.0"
-        var token = ""
-        val propsFile = rootProject.file("local.properties")
-        if (propsFile.exists()) {
-            val p = Properties()
-            propsFile.reader().use { p.load(it) }
-            token = p.getProperty("github.token", "")
-        }
-        buildConfigField("String", "GITHUB_TOKEN", "\"$token\"")
+        versionCode = 32
+        versionName = "1.21.0"
+        // Release ships anonymous (read-only) GitHub access; see `debug` below.
+        buildConfigField("String", "GITHUB_TOKEN", "\"\"")
     }
 
     signingConfigs {
@@ -45,6 +59,8 @@ android {
     buildTypes {
         debug {
             signingConfig = signingConfigs.getByName("release")
+            // Debug-only: enables the write-capable publish helpers for local DB pushes.
+            buildConfigField("String", "GITHUB_TOKEN", "\"$githubToken\"")
         }
         release {
             signingConfig = signingConfigs.getByName("release")
