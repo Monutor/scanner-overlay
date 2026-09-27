@@ -191,12 +191,27 @@ private fun ArticleBarcodeScreen() {
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
-                                    val barcodeBmp = remember(item.barcode) {
-                                        BarcodeGenerator.ean13Bitmap(item.barcode, 300, 80)
+                                    // The state must be keyed by barcode, not only the producing
+                                    // coroutine: produceState remembers its MutableState without
+                                    // a key, so after a new search the card kept rendering the
+                                    // PREVIOUS product's barcode until ZXing finished.
+                                    val barcodeBmpState = remember(item.barcode) {
+                                        mutableStateOf<android.graphics.Bitmap?>(null)
                                     }
-                                    if (barcodeBmp != null) {
+                                    LaunchedEffect(item.barcode) {
+                                        // Off the composition thread: ZXing encode + rasterize
+                                        // freezes UI when dozens of results render at once.
+                                        barcodeBmpState.value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                                            BarcodeGenerator.ean13Bitmap(item.barcode, 300, 80)
+                                        }
+                                    }
+                                    val barcodeBmp = barcodeBmpState.value
+                                    val barcodeImage = remember(barcodeBmp) {
+                                        barcodeBmp?.asImageBitmap()
+                                    }
+                                    if (barcodeImage != null) {
                                         Image(
-                                            bitmap = barcodeBmp.asImageBitmap(),
+                                            bitmap = barcodeImage,
                                             contentDescription = "Штрихкод",
                                             modifier = Modifier.fillMaxWidth().height(72.dp),
                                             contentScale = ContentScale.Fit
@@ -232,6 +247,8 @@ private fun ArticleBarcodeScreen() {
     }
 }
 
+private val ARTICLE_CODE_REGEX = Regex("""mvideo\.ru/products/(\d+)""")
+
 private fun extractArticleCode(url: String): String? {
-    return Regex("""mvideo\.ru/products/(\d+)""").find(url)?.groupValues?.get(1)
+    return ARTICLE_CODE_REGEX.find(url)?.groupValues?.get(1)
 }

@@ -12,9 +12,19 @@ fun Context.toastAtBottom(message: CharSequence, duration: Int = Toast.LENGTH_SH
     }
 }
 
-fun reusableBottomToast(context: Context, duration: Int = Toast.LENGTH_SHORT): Toast {
+/**
+ * Toast that is re-shown several times (a countdown) with a changing text.
+ *
+ * [initialText] is mandatory on purpose: a toast that is shown before its first setText
+ * pops up as an empty grey box, so the text has to be known at creation time.
+ */
+fun reusableBottomToast(
+    context: Context,
+    initialText: CharSequence,
+    duration: Int = Toast.LENGTH_SHORT
+): Toast {
     val marginPx = (96 * context.resources.displayMetrics.density).toInt()
-    return Toast.makeText(context, "", duration).apply {
+    return Toast.makeText(context, initialText, duration).apply {
         setGravity(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, 0, marginPx)
     }
 }

@@ -3,6 +3,7 @@ package com.scanner.overlay
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import com.scanner.overlay.scanner.BarcodeDatabase
 import com.scanner.overlay.update.UpdateNotifier
 import dagger.hilt.android.HiltAndroidApp
 
@@ -13,6 +14,11 @@ class ScannerApp : Application() {
         createSewResultChannel()
         createUpdateChannel()
         UpdateNotifier.startPeriodicCheck(this)
+        // Полки нужны сразу нескольким экранам (история сканов в настройках, избранное,
+        // окно выбора полки), а init() парсит assets на 1.27 МБ. Запускаем один раз
+        // здесь в фоне: иначе первый экран, открытый до сканера, видел пустую базу,
+        // а вызов из Activity на главном потоке фризил интерфейс.
+        Thread({ BarcodeDatabase.init(applicationContext) }, "barcode-db-init").start()
     }
 
     private fun createSewResultChannel() {
@@ -22,6 +28,10 @@ class ScannerApp : Application() {
             NotificationManager.IMPORTANCE_HIGH
         )
         val manager = getSystemService(NotificationManager::class.java)
+        if (manager == null) {
+            android.util.Log.e("ScannerApp", "NotificationManager unavailable, SEW channel not created")
+            return
+        }
         manager.createNotificationChannel(channel)
     }
 
@@ -34,6 +44,10 @@ class ScannerApp : Application() {
             description = "Уведомления о новых версиях"
         }
         val manager = getSystemService(NotificationManager::class.java)
+        if (manager == null) {
+            android.util.Log.e("ScannerApp", "NotificationManager unavailable, update channel not created")
+            return
+        }
         manager.createNotificationChannel(channel)
     }
 

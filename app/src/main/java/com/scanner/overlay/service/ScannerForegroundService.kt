@@ -60,21 +60,22 @@ class ScannerForegroundService : Service() {
                 srv.floatingPanel.setOpacity(value)
             }
         }
-
-        fun rebuildPanel() {
-            serviceInstance?.let { srv -> srv.floatingPanel.rebuild() }
-        }
     }
 
     override fun onCreate() {
         super.onCreate()
         isRunning = true
-        serviceInstance = this
         prefs.edit().putBoolean(PREF_KEY_SERVICE_RUNNING, true).apply()
         createNotificationChannel()
-        UpdateNotifier.check(this)
+        // UpdateNotifier launches in a static scope that is never cancelled, so it must not
+        // capture the Service (and through it the panel's WindowManager view tree).
+        UpdateNotifier.check(applicationContext)
         floatingPanel = FloatingPanel(this, prefs)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        // Publish the instance only once the panel is usable: the static setters above touch
+        // `floatingPanel` (a lateinit), and an early assignment would let them run against an
+        // uninitialized property.
+        serviceInstance = this
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
                 NOTIFICATION_ID,
                 createNotification(),
@@ -88,8 +89,17 @@ class ScannerForegroundService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         isRunning = false
-        floatingPanel.hide()
-        prefs.edit().putBoolean(PREF_KEY_SERVICE_RUNNING, false).apply()
+        serviceInstance = null
+        // onCreate мог упасть до инициализации (startForeground/Hilt) — не маскируем
+        // исходную причину UninitializedPropertyAccessException из onDestroy.
+        if (::floatingPanel.isInitialized) {
+            try {
+                floatingPanel.hide()
+            } catch (_: Exception) { }
+        }
+        try {
+            prefs.edit().putBoolean(PREF_KEY_SERVICE_RUNNING, false).apply()
+        } catch (_: Exception) { }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -107,7 +117,13 @@ class ScannerForegroundService : Service() {
                 stopSelf()
                 return START_NOT_STICKY
             }
-            ACTION_STOP -> stopSelf()
+            ACTION_STOP -> {
+                stopSelf()
+                // Must not fall through to START_STICKY below: the system may restart a
+                // sticky service before it actually dies, and the null-intent branch would
+                // then bring the panel back right after the user tapped "Stop".
+                return START_NOT_STICKY
+            }
             ACTION_SET_EDGE -> {
                 val edge = intent.getStringExtra(EXTRA_EDGE) ?: "right"
                 val edgeEnum = if (edge == "left") FloatingPanel.Edge.LEFT else FloatingPanel.Edge.RIGHT

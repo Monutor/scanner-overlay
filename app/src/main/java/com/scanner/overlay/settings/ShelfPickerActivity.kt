@@ -48,12 +48,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.lifecycleScope
 import com.scanner.overlay.accessibility.ScannerAccessibilityService
 import com.scanner.overlay.calibration.SewCalibration
 import com.scanner.overlay.scanner.BarcodeDatabase
 import com.scanner.overlay.scanner.WarehouseItem
 import com.scanner.overlay.util.toastAtBottom
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -70,7 +72,6 @@ class ShelfPickerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("scanner_prefs", MODE_PRIVATE)
-        BarcodeDatabase.init(applicationContext)
         textToSpeech = TextToSpeech(this) { status ->
             ttsReady = (status == TextToSpeech.SUCCESS)
             if (ttsReady) {
@@ -80,13 +81,19 @@ class ShelfPickerActivity : ComponentActivity() {
                 android.util.Log.w("ShelfPickerActivity", "TTS init failed: status=$status")
             }
         }
-        setContent {
-            MaterialTheme {
-                ShelfPickerScreen(
-                    favoritesStore = favoritesStore,
-                    onPick = ::onShelfPicked,
-                    onDismiss = ::finish
-                )
+        // Список полок читается с диска (assets 1.27 МБ), поэтому init — в фоновом потоке.
+        // Экран ставим только после готовности, иначе remember { getAllShelves() } навсегда
+        // запомнил бы пустой список. lifecycleScope отменяет задачу, если Activity умрёт.
+        lifecycleScope.launch {
+            BarcodeDatabase.initAsync(applicationContext)
+            setContent {
+                MaterialTheme {
+                    ShelfPickerScreen(
+                        favoritesStore = favoritesStore,
+                        onPick = ::onShelfPicked,
+                        onDismiss = ::finish
+                    )
+                }
             }
         }
     }
@@ -162,6 +169,9 @@ class ShelfPickerActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        // Without this the pending 5-second finish() (and the TTS onDone/onError posts) keep
+        // the Activity alive after the user already left, and finish() can fire on a dead one.
+        mainHandler.removeCallbacksAndMessages(null)
         textToSpeech?.stop()
         textToSpeech?.shutdown()
         textToSpeech = null

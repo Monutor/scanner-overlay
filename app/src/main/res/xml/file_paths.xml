@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <external-cache-path name="updates" path="." />
+    <!-- AutoUpdateManager откатывается на внутренний cacheDir, когда externalCacheDir
+         недоступен (внешнее хранилище не смонтировано). Без этого корня FileProvider
+         бросает IllegalArgumentException "Failed to find configured root". -->
+    <cache-path name="updates_internal" path="." />
 </paths>

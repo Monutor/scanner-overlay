@@ -48,6 +48,7 @@ class FloatingPanel(
     private var edge: Edge = Edge.RIGHT
     private var isOpen = true
     private var isAnimating = false
+    private var toggleAnimator: ValueAnimator? = null
     private var lastTapTime = 0L
     private var dragStartX = 0
     private var dragStartY = 0
@@ -98,6 +99,8 @@ class FloatingPanel(
     }
 
     fun hide() {
+        toggleAnimator?.cancel()
+        toggleAnimator = null
         isAnimating = false
         rootView?.let {
             try {
@@ -240,23 +243,34 @@ class FloatingPanel(
         if (isAnimating) return
         isOpen = !isOpen
         prefs.edit().putBoolean(PREF_OPEN, isOpen).apply()
-        val startX = params!!.x
+        val startX = params?.x ?: return
         val endX = if (isOpen) calcOpenX() else calcClosedX()
         isAnimating = true
-        ValueAnimator.ofFloat(startX.toFloat(), endX.toFloat()).apply {
+        toggleAnimator = ValueAnimator.ofFloat(startX.toFloat(), endX.toFloat()).apply {
             duration = ANIM_MS
             interpolator = PathInterpolator(0.22f, 1f, 0.36f, 1f)
             addUpdateListener { a ->
-                params!!.x = (a.animatedValue as Float).toInt()
-                wm.updateViewLayout(rootView!!, params!!)
+                try {
+                    val p = params ?: return@addUpdateListener
+                    val v = rootView ?: return@addUpdateListener
+                    p.x = (a.animatedValue as Float).toInt()
+                    wm.updateViewLayout(v, p)
+                } catch (_: Exception) {
+                }
             }
             addListener(object : AnimatorListenerAdapter() {
                 override fun onAnimationEnd(a: android.animation.Animator) {
                     isAnimating = false
+                    toggleAnimator = null
                     updateArrow()
                 }
+
+                override fun onAnimationCancel(a: android.animation.Animator) {
+                    isAnimating = false
+                    toggleAnimator = null
+                }
             })
-        }.start()
+        }.also { it.start() }
     }
 
     private fun onPanelTouch(event: MotionEvent): Boolean {
@@ -319,11 +333,20 @@ class FloatingPanel(
 
     fun getEdge(): Edge = edge
 
-    fun rebuild() {
-        rootView?.let { wm.removeView(it) }
+    /** @return true if the panel is attached to the window manager after the rebuild. */
+    fun rebuild(): Boolean {
+        toggleAnimator?.cancel()
+        toggleAnimator = null
+        isAnimating = false
+        rootView?.let {
+            try {
+                wm.removeView(it)
+            } catch (_: Exception) {
+            }
+        }
         rootView = null
         params = null
-        show()
+        return show()
     }
 
     private fun launch(idx: Int) {

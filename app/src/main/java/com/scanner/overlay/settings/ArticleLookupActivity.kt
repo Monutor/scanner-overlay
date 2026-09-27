@@ -43,6 +43,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -109,6 +110,9 @@ private fun ArticleLookupScreen(initialQuery: String, onClose: () -> Unit) {
     }
 
     val canSearch = query.trim().isNotEmpty()
+
+    val webViewRef = remember { mutableStateOf<WebView?>(null) }
+
     val performSearch: () -> Unit = {
         val q = query.trim()
         if (q.isNotEmpty()) {
@@ -116,7 +120,13 @@ private fun ArticleLookupScreen(initialQuery: String, onClose: () -> Unit) {
         }
     }
 
-    BackHandler(enabled = true) { onClose() }
+    BackHandler(enabled = true) {
+        if (webViewRef.value?.canGoBack() == true) {
+            webViewRef.value?.goBack()
+        } else {
+            onClose()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -149,7 +159,8 @@ private fun ArticleLookupScreen(initialQuery: String, onClose: () -> Unit) {
                     WebViewHost(
                         targetUrl = targetUrl,
                         onLoaded = { state = ArticleState.Loaded(it) },
-                        onError = { state = ArticleState.Error(it) }
+                        onError = { state = ArticleState.Error(it) },
+                        onWebViewSet = { webViewRef.value = it }
                     )
                 }
                 when (val s = state) {
@@ -271,8 +282,16 @@ private fun LoadingState(modifier: Modifier = Modifier, onCancel: () -> Unit) {
 private fun WebViewHost(
     targetUrl: String,
     onLoaded: (String) -> Unit,
-    onError: (String) -> Unit
+    onError: (String) -> Unit,
+    onWebViewSet: (WebView?) -> Unit
 ) {
+    val webViewHolder = remember { mutableStateOf<WebView?>(null) }
+    // The URL we asked the WebView to load, as opposed to the URL it currently shows. A
+    // redirect (or a page that never finished loading) makes webView.url differ from
+    // targetUrl, and comparing against webView.url re-triggered loadUrl on every
+    // recomposition - reloading the page while the user types the next SKU digit and
+    // losing the scroll position.
+    val requestedUrl = remember { mutableStateOf(targetUrl) }
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { ctx ->
@@ -312,17 +331,34 @@ private fun WebViewHost(
                         handler: SslErrorHandler?,
                         error: android.net.http.SslError?
                     ) {
-                        handler?.proceed()
+                        handler?.cancel()
+                        onError(error?.url ?: targetUrl)
                     }
                 }
+                webViewHolder.value = this
+                onWebViewSet(this)
+                requestedUrl.value = targetUrl
+                loadUrl(targetUrl)
             }
         },
         update = { view ->
-            if (view.url != targetUrl) {
+            if (requestedUrl.value != targetUrl) {
+                requestedUrl.value = targetUrl
                 view.loadUrl(targetUrl)
             }
         }
     )
+    // Уничтожаем WebView при уходе из композиции (ротация/finish): иначе утечка + потеря состояния запроса.
+    DisposableEffect(Unit) {
+        onDispose {
+            webViewHolder.value?.let { web ->
+                (web.parent as? ViewGroup)?.removeView(web)
+                web.destroy()
+            }
+            webViewHolder.value = null
+            onWebViewSet(null)
+        }
+    }
 }
 
 @Composable
