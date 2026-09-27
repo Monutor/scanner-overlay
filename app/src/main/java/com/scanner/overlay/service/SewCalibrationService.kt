@@ -33,6 +33,13 @@ class SewCalibrationService : Service() {
     private var prefs: SharedPreferences? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val addOverlayRunnable = Runnable { addOverlay() }
+    /**
+     * Safety net: the overlay window is MATCH_PARENT and deliberately consumes every
+     * touch (the two calibration taps must not reach SEW), so without a hard deadline
+     * an interrupted calibration would leave an invisible full-screen touch-eater on
+     * top of the device until the user finds the notification's "Отмена".
+     */
+    private val overlayTimeoutRunnable = Runnable { onCalibrationTimeout() }
     private val countdownRunnable = object : Runnable {
         private var remaining = (STARTUP_DELAY_MS / 1000L).toInt()
         override fun run() {
@@ -56,8 +63,8 @@ class SewCalibrationService : Service() {
         prefs = getSharedPreferences("scanner_prefs", MODE_PRIVATE)
         prefs?.edit()?.putBoolean(PREF_KEY_AWAITING, true)?.apply()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        countdownToast = reusableBottomToast(this)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        countdownToast = reusableBottomToast(this, "Оверлей через ${STARTUP_DELAY_MS / 1000L} сек")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
                 NOTIFICATION_ID,
                 buildNotification(stepIndex = STEP_PREPARING),
@@ -118,8 +125,30 @@ class SewCalibrationService : Service() {
             )
         }
 
-        windowManager.addView(overlayView, params)
+        // addView бросает BadTokenException (нет SYSTEM_ALERT_WINDOW, оверлей поверх
+        // уведомлений, повторный addView). Без try/catch исключение уходит в main-looper
+        // и роняет процесс, а onDestroy/stopSelf не выполняются — PREF_KEY_AWAITING
+        // остаётся true и в настройках висит «ожидание калибровки» до перезапуска.
+        try {
+            windowManager.addView(overlayView, params)
+        } catch (e: Exception) {
+            // onDestroy проверяет ::overlayView.isInitialized, поэтому поле оставляем
+            // присвоенным — просто не считаем, что окно показано.
+            android.util.Log.e("SewCalibrationService", "addOverlay: windowManager.addView failed: ${e.message}")
+            toastAtBottom("Не удалось показать экран калибровки. Проверьте разрешение «поверх других приложений»", Toast.LENGTH_LONG)
+            stopSelf()
+            return
+        }
+        mainHandler.postDelayed(overlayTimeoutRunnable, OVERLAY_TIMEOUT_MS)
         updateNotification(stepIndex = 0)
+    }
+
+    private fun onCalibrationTimeout() {
+        updateOverlayStatus("Время калибровки истекло")
+        mainHandler.post {
+            toastAtBottom("Калибровка отменена: время истекло", Toast.LENGTH_LONG)
+        }
+        stopSelf()
     }
 
     private fun updateOverlayStatus(text: String) {
@@ -159,6 +188,7 @@ class SewCalibrationService : Service() {
                 ?.putInt("sew_confirm_y", y)
                 ?.apply()
             val msg = "Калибровка сохранена: $capturedPackage"
+            mainHandler.removeCallbacks(overlayTimeoutRunnable)
             updateOverlayStatus(msg)
             mainHandler.post {
                 toastAtBottom(msg)
@@ -216,6 +246,7 @@ class SewCalibrationService : Service() {
         if (intent?.action == ACTION_STOP) {
             mainHandler.removeCallbacks(countdownRunnable)
             mainHandler.removeCallbacks(addOverlayRunnable)
+            mainHandler.removeCallbacks(overlayTimeoutRunnable)
             stopSelf()
         }
         return START_NOT_STICKY
@@ -226,11 +257,12 @@ class SewCalibrationService : Service() {
         isRunning = false
         mainHandler.removeCallbacks(countdownRunnable)
         mainHandler.removeCallbacks(addOverlayRunnable)
+        mainHandler.removeCallbacks(overlayTimeoutRunnable)
         if (::countdownToast.isInitialized) {
             try { countdownToast.cancel() } catch (_: Exception) {}
         }
         prefs?.edit()?.putBoolean(PREF_KEY_AWAITING, false)?.apply()
-        if (::overlayView.isInitialized) {
+        if (::overlayView.isInitialized && ::windowManager.isInitialized) {
             try {
                 windowManager.removeView(overlayView)
             } catch (_: Exception) {}
@@ -243,6 +275,8 @@ class SewCalibrationService : Service() {
         private const val NOTIFICATION_ID = 1002
         private const val CHANNEL_ID = "sew_calibration_channel"
         private const val STARTUP_DELAY_MS = 5000L
+        /** Hard deadline for the full-screen calibration overlay (see overlayTimeoutRunnable). */
+        private const val OVERLAY_TIMEOUT_MS = 60_000L
         private const val STEP_PREPARING = -1
         const val ACTION_STOP = "com.scanner.overlay.service.STOP_SEW_CALIBRATION"
         const val PREF_KEY_AWAITING = "sew_awaiting_calibration"

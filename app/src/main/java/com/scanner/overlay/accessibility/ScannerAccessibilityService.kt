@@ -1,4 +1,4 @@
-package com.scanner.overlay.accessibility
+﻿package com.scanner.overlay.accessibility
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
@@ -13,7 +13,6 @@ import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
-import android.view.inputmethod.EditorInfo
 import android.content.SharedPreferences
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -41,7 +40,21 @@ class ScannerAccessibilityService : AccessibilityService() {
     @Volatile private var sewResultDelivered: Boolean = false
     @Volatile private var pendingSewResult: SewInputCallback? = null
     @Volatile private var lastEffectiveTarget: String = ""
-    private val watchdogHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * Handler that owns the current SEW run's step callbacks and its watchdog.
+     *
+     * This handler *is* the run identity. Every step of a run is posted here and the
+     * whole queue is wiped the moment the run finishes, so a step that had not run yet
+     * can never resume inside the next run. The boolean flags alone cannot do this:
+     * `sewResultDelivered` is reset to false by the next run, which lets a leftover
+     * callback from a timed-out run pass its guard and tap SEW a second time.
+     *
+     * A per-run handler is used instead of `mainHandler` because the legacy
+     * `injectText` path shares `mainHandler`, and wiping that queue would kill it.
+     */
+    private var sewRunHandler: Handler? = null
+    private var pendingWatchdog: Runnable? = null
     private val watchdogTimeoutMs: Long = 8_000L
     private val maxSetTextAttempts: Int = 5
     private var _inputMode: String = "fast"
@@ -55,6 +68,12 @@ class ScannerAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         _instance.clear()
+        sewRunHandler?.removeCallbacksAndMessages(null)
+        sewRunHandler = null
+        pendingWatchdog = null
+        // Nothing may stay queued after the service dies: a leftover callback would hold
+        // pendingSewResult (and the ViewModel/Activity behind it) and report a second result.
+        mainHandler.removeCallbacksAndMessages(null)
         pendingClipboardRestore?.let { original ->
             val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
             val currentClip = clipboard.primaryClip
@@ -79,116 +98,73 @@ class ScannerAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {
         android.util.Log.w("ScannerAccessibility", "Service interrupted")
         mainHandler.removeCallbacksAndMessages(null)
-        watchdogHandler.removeCallbacksAndMessages(null)
+        sewRunHandler?.removeCallbacksAndMessages(null)
+        sewRunHandler = null
+        // Callbacks are gone with the handlers above, so finish the run explicitly —
+        // otherwise sewInputInProgress stays true forever and blocks all future input.
+        if (sewInputInProgress && !sewResultDelivered) {
+            val cb = pendingSewResult
+            pendingSewResult = null
+            sewResultDelivered = true
+            sewInputInProgress = false
+            cb?.invoke(false, "Сервис прерван")
+        } else {
+            sewInputInProgress = false
+            pendingSewResult = null
+        }
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    fun autoInjectText(text: String): Boolean {
-        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "autoInjectText: text=$text, instance=${instance != null}, winCount=${windows.size}")
-        val input = findFocusedOrEditable()
-        if (input != null) {
-            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "autoInjectText: found node, pkg=${input.packageName}, editable=${input.isEditable}, focused=${input.isFocused}, visible=${input.isVisibleToUser}")
-            setText(input, text)
-            return true
-        }
-        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "autoInjectText: node NOT found")
-        return false
-    }
-
-    fun injectText(text: String) {
-        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "injectText scheduled: text=$text")
-        mainHandler.removeCallbacksAndMessages(null)
-        mainHandler.postDelayed({
-            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "injectText running: winCount=${windows.size}")
-            val input = findFocusedOrEditable()
-            if (input != null) {
-                if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "injectText: found node, pkg=${input.packageName}")
-                setText(input, text)
-            } else {
-                if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "injectText: node NOT found")
-            }
-        }, 600)
-    }
-
-    private fun findFocusedOrEditable(): AccessibilityNodeInfo? {
-        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "findFocusedOrEditable: winCount=${windows.size}")
-        val focus = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "findFocus result: $focus")
-        focus?.let {
-            if (it.isEditable) {
-                if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "findFocus is editable, returning pkg=${it.packageName}")
-                return it
-            }
-            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "findFocus not editable (editable=${it.isEditable}, focused=${it.isFocused}, pkg=${it.packageName}), falling through to window scan")
-            it.safeRecycle()
-        }
-        val ownPkg = BuildConfig.APPLICATION_ID
-        for ((i, win) in windows.withIndex()) {
-            if (!win.isActive) {
-                if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "  window[$i] not active, skip")
-                continue
-            }
-            val root = win.root ?: continue
-            val pkg = root.packageName?.toString() ?: ""
-            if (pkg == ownPkg) {
-                if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "  window[$i] own package ($pkg), skip")
-                root.safeRecycle()
-                continue
-            }
-            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "  window[$i] active pkg=$pkg className=${root.className}")
-            val found = findInputField(root)
-            if (found != null) {
-                if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "  window[$i] -> FOUND editable field! pkg=${found.packageName} className=${found.className}")
-                root.safeRecycle()
-                return found
-            }
-            root.safeRecycle()
-        }
-        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "findFocusedOrEditable: no editable field found in any active window")
-        return null
-    }
-
-    private fun findInputField(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        val queue = java.util.ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-        var depth = 0
-        while (queue.isNotEmpty() && depth < 50) {
-            repeat(queue.size) {
-                val node = queue.poll() ?: return@repeat
-                if (node.isEditable || node.isFocused) {
-                    clearQueue(queue)
-                    return node
-                }
-                for (i in 0 until node.childCount) {
-                    val child = node.getChild(i) ?: continue
-                    queue.add(child)
-                }
-                node.safeRecycle()
-            }
-            depth++
-        }
-        clearQueue(queue)
-        return null
-    }
-
+    /**
+     * Ищет кнопку подтверждения («Готово» и т.п.) в дереве [root].
+     *
+     * Проверка «узел содержит слово Готово» сама по себе ненадёжна: WebView склеивает
+     * текст страницы в контейнерные узлы, поэтому подстрока «Send»/«Done» находится
+     * где угодно на странице. Из-за этого тап уходил в произвольный элемент, а
+     * `isButtonStillPresent()` после успешной отправки возвращал true по слову «Send»
+     * на оставшейся под модалкой странице и прогон завершался ошибкой
+     * «Кнопка не нажалась» при уже введённом штрихкоде.
+     *
+     * Поэтому поиск идёт в три прохода, от точного к общему:
+     *  1. настоящий контрол (clickable / Button / viewId) с короткой подписью;
+     *  2. короткая подпись без требования контрола — WebView часто отдаёт метку
+     *     на не-кликабельном узле;
+     *  3. прежнее свободное поведение — только если ничего лучше не нашлось, чтобы
+     *     не превратить исправление в новую ложноотрицательную ошибку.
+     *
+     * Шаги поиска кнопки и проверки «кнопка всё ещё на месте» используют одну и ту же
+     * функцию, поэтому найденная кнопка и проверка после тапа всегда дают одинаковый
+     * ответ по одному и тому же узлу.
+     */
     private fun findSendButton(
         root: AccessibilityNodeInfo,
         targets: List<String>
     ): AccessibilityNodeInfo? {
+        findConfirmButtonNode(root) { node ->
+            looksLikeButton(node) && isShortConfirmLabel(node, targets)
+        }?.let { return it }
+        return findConfirmButtonNode(root) { node ->
+            isShortConfirmLabel(node, targets)
+        } ?: findConfirmButtonNode(root) { node ->
+            isLooseConfirmLabel(node, targets)
+        }
+    }
+
+    private fun findConfirmButtonNode(
+        root: AccessibilityNodeInfo,
+        matches: (AccessibilityNodeInfo) -> Boolean
+    ): AccessibilityNodeInfo? {
         val queue = java.util.ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
+        // root не возвращаем (см. findInputField): вызывающий ресайклит root после поиска.
+        for (i in 0 until root.childCount) {
+            root.getChild(i)?.let { queue.add(it) }
+        }
         var depth = 0
         while (queue.isNotEmpty() && depth < 50) {
             repeat(queue.size) {
                 val node = queue.poll() ?: return@repeat
-                val cd = node.contentDescription?.toString() ?: ""
-                if (cd.isNotEmpty() && targets.any { cd.contains(it, ignoreCase = true) }) {
-                    clearQueue(queue)
-                    return node
-                }
-                val nodeText = node.text?.toString() ?: ""
-                if (nodeText.isNotEmpty() && targets.any { nodeText.contains(it, ignoreCase = true) }) {
+                if (matches(node)) {
                     clearQueue(queue)
                     return node
                 }
@@ -204,9 +180,49 @@ class ScannerAccessibilityService : AccessibilityService() {
         return null
     }
 
+    /** Подпись узла: contentDescription — это метка доступности, text может быть агрегатом страницы. */
+    private fun confirmLabel(node: AccessibilityNodeInfo): String {
+        val cd = node.contentDescription?.toString()?.trim().orEmpty()
+        if (cd.isNotEmpty()) return cd
+        return node.text?.toString()?.trim().orEmpty()
+    }
+
+    /**
+     * Короткая подпись кнопки: либо точное совпадение, либо подстрока в коротком тексте.
+     * Длинный текст — это контейнер вёрстки WebView, а не кнопка.
+     */
+    private fun isShortConfirmLabel(node: AccessibilityNodeInfo, targets: List<String>): Boolean {
+        val label = confirmLabel(node)
+        if (label.isEmpty()) return false
+        if (targets.any { it.equals(label, ignoreCase = true) }) return true
+        if (label.length > MAX_CONFIRM_LABEL_LENGTH) return false
+        return targets.any { label.contains(it, ignoreCase = true) }
+    }
+
+    /** Прежнее свободное совпадение: contentDescription и text проверялись по отдельности. */
+    private fun isLooseConfirmLabel(node: AccessibilityNodeInfo, targets: List<String>): Boolean {
+        val cd = node.contentDescription?.toString() ?: ""
+        if (cd.isNotEmpty() && targets.any { cd.contains(it, ignoreCase = true) }) return true
+        val nodeText = node.text?.toString() ?: ""
+        return nodeText.isNotEmpty() && targets.any { nodeText.contains(it, ignoreCase = true) }
+    }
+
+    private fun looksLikeButton(node: AccessibilityNodeInfo): Boolean {
+        if (node.isClickable) return true
+        val className = node.className?.toString() ?: ""
+        if (className.contains("Button", ignoreCase = true)) return true
+        val viewId = node.viewIdResourceName?.toString() ?: ""
+        return viewId.contains("button", ignoreCase = true) ||
+            viewId.contains("send", ignoreCase = true) ||
+            viewId.contains("done", ignoreCase = true)
+    }
+
     private fun findNodeContaining(root: AccessibilityNodeInfo, text: String): AccessibilityNodeInfo? {
         val queue = java.util.ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
+        // root не возвращаем (см. findInputField): вызывающий ресайклит root после поиска.
+        for (i in 0 until root.childCount) {
+            root.getChild(i)?.let { queue.add(it) }
+        }
         var depth = 0
         while (queue.isNotEmpty() && depth < 50) {
             repeat(queue.size) {
@@ -237,160 +253,34 @@ class ScannerAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun setText(node: AccessibilityNodeInfo, text: String) {
-        lastInjectedText = text
-        val args = Bundle().apply {
-            putCharSequence(
-                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                text
-            )
-        }
-        node.refresh()
-        val setTextOk = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "setText(legacy): ACTION_SET_TEXT ok=$setTextOk pkg=${node.packageName} text='$text'")
-        if (setTextOk) {
-            val textToSend = text
-            mainHandler.postDelayed({
-                pressEnter(node)
-                node.safeRecycle()
-                mainHandler.postDelayed({
-                    findAndClickSendButton(500, textToSend)
-                }, 300)
-            }, 200)
-            return
-        }
-
-        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "setText(legacy): ACTION_SET_TEXT FAILED, using clipboard+contextMenu fallback")
-        val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-        val original = clipboard.primaryClip
-        pendingClipboardRestore = original
-        clipboard.setPrimaryClip(ClipData.newPlainText("barcode", text))
-
-        node.refresh()
-        val clickOk = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-        val focusOk = node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "setText(legacy): ACTION_CLICK ok=$clickOk ACTION_FOCUS ok=$focusOk")
-        node.safeRecycle()
-
-        mainHandler.postDelayed({
-            node.safeRecycle()
-            val focused = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-            if (focused != null && Build.VERSION.SDK_INT >= 28) {
-                try {
-                    val pasteOk = focused.performAction(
-                        AccessibilityNodeInfo.AccessibilityAction.ACTION_PASTE.id
-                    )
-                    if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "setText legacy: ACTION_PASTE ok=$pasteOk")
-                    if (!pasteOk) {
-                        focused.safeRecycle()
-                        pasteFromContextMenu()
-                    } else {
-                        mainHandler.postDelayed({
-                            val pastedField = findFocusedOrEditable()
-                            if (pastedField != null) {
-                                pressEnter(pastedField)
-                                pastedField.safeRecycle()
-                            }
-                            pendingClipboardRestore = null
-                            val currentClip = clipboard.primaryClip
-                            val stillOurs = currentClip != null &&
-                                currentClip.itemCount > 0 &&
-                                currentClip.getItemAt(0)?.text?.toString() == text
-                            if (stillOurs) original?.let { clipboard.setPrimaryClip(it) }
-                            else if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "setText fallback: clipboard changed by user, skip restore")
-                        }, 100L)
-                    }
-                } catch (_: Exception) {
-                    pasteFromContextMenu()
-                }
-            } else {
-                focused?.safeRecycle()
-                pasteFromContextMenu()
-            }
-        }, 250)
-    }
-
-    private fun pressEnter(node: AccessibilityNodeInfo?) {
-        if (node != null) {
+    /** refresh()+performAction, shielded: stale/recycled nodes throw IllegalStateException. */
+    private fun safePerformAction(node: AccessibilityNodeInfo, action: Int, args: Bundle? = null): Boolean {
+        return try {
             node.refresh()
-            if (Build.VERSION.SDK_INT >= 33) {
-                try {
-                    if (node.performAction(
-                            AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
-                        )
-                    ) {
-                        return
-                    }
-                } catch (_: Exception) {}
-            }
-            // Fallback: blur the field to trigger keyboard's "Done" action
-            try {
-                node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            } catch (_: Exception) {}
+            node.performAction(action, args)
+        } catch (_: Exception) {
+            false
         }
     }
 
-    private fun pasteFromContextMenu() {
-        val focused = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "pasteFromContextMenu: focused=${focused != null}")
-        if (focused != null) {
-            focused.refresh()
-            val longClickOk = focused.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
-            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "pasteFromContextMenu: ACTION_LONG_CLICK ok=$longClickOk")
-            focused.safeRecycle()
-        }
-        mainHandler.postDelayed({
-            findAndClickPaste()
-        }, 400)
-    }
-
-    private fun findAndClickPaste() {
-        val targets = listOf("Вставить", "Paste", "Встав")
-        if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "findAndClickPaste: searching ${windows.size} windows for $targets")
-        for (win in windows) {
-            val root = win.root ?: continue
-            for (text in targets) {
-                val node = findNodeContaining(root, text)
-                if (node != null && node.isClickable) {
-                    val pkg = win.root?.packageName?.toString() ?: "<null>"
-                    if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "findAndClickPaste: found '$text' in pkg=$pkg, clicking")
-                    node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                    node.safeRecycle()
-                    root.safeRecycle()
-                    return
-                }
-                node?.safeRecycle()
+    /**
+     * Вернуть пользовательский буфер обмена, если в нём до сих пор наш внедрённый текст.
+     * Stash сбрасывается только при фактическом восстановлении — иначе ретрай той же
+     * сессии потерял бы оригинал, а чужой текст пользователя никогда не затираем.
+     */
+    private fun restoreClipboardIfOurs(expectedText: String?) {
+        val stashed = pendingClipboardRestore ?: return
+        if (expectedText == null) return
+        try {
+            val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+            val current = clipboard.primaryClip
+            val stillOurs = current != null && current.itemCount > 0 &&
+                current.getItemAt(0)?.text?.toString() == expectedText
+            if (stillOurs) {
+                clipboard.setPrimaryClip(stashed)
+                pendingClipboardRestore = null
             }
-            root.safeRecycle()
-        }
-        if (BuildConfig.DEBUG) {
-            val winSummary = windows.mapNotNull { it.root?.packageName?.toString() }.distinct().joinToString(",")
-            android.util.Log.d("ScannerAccessibility", "findAndClickPaste: NOT FOUND. activePackages=[$winSummary]")
-        }
-    }
-
-    private fun findAndClickSendButton(timeoutMs: Long, barcode: String) {
-        val targets = listOf("Send", "Отправить", "Submit", "Готово", "Done")
-        mainHandler.postDelayed({
-            val focusedNode = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-            if (focusedNode != null) {
-                val text = focusedNode.text?.toString() ?: ""
-                focusedNode.safeRecycle()
-                if (text.contains(barcode)) {
-                    for (win in windows) {
-                        val root = win.root ?: continue
-                        val sendBtn = findSendButton(root, targets)
-                        root.safeRecycle()
-                        if (sendBtn != null && sendBtn.isClickable) {
-                            sendBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                            sendBtn.safeRecycle()
-                            return@postDelayed
-                        }
-                        sendBtn?.safeRecycle()
-                    }
-                }
-            }
-        }, timeoutMs)
+        } catch (_: Exception) { }
     }
 
     fun setInputMode(mode: String) {
@@ -401,6 +291,13 @@ class ScannerAccessibilityService : AccessibilityService() {
     private val isFastMode: Boolean get() = _inputMode == "fast"
 
     companion object {
+        /**
+         * Максимальная длина подписи, при которой узел ещё считается кнопкой, а не
+         * контейнером вёрстки. WebView отдаёт текст модального окна одним узлом, поэтому
+         * без ограничения подстрока «Готово» находилась в половине DOM страницы.
+         */
+        private const val MAX_CONFIRM_LABEL_LENGTH = 32
+
         private var _instance: WeakReference<ScannerAccessibilityService?> = WeakReference(null)
         val instance: ScannerAccessibilityService?
             get() = _instance.get()
@@ -439,11 +336,21 @@ class ScannerAccessibilityService : AccessibilityService() {
             sewResultDelivered = false
             pendingSewResult = onResult
             lastEffectiveTarget = effectiveTarget
+            // Fresh clipboard stash per run: a stash left over from an earlier run (its
+            // restore was skipped because the user had already copied something of their
+            // own) must not outlive that run, or a later restore would overwrite
+            // whatever the user copied in the meantime.
+            pendingClipboardRestore = null
+            lastInjectedText = null
             effectiveBarcode = if (testMode) "TEST_CALIBRATION" else barcode
         }
 
         val startDelay = if (isFastMode) 0L else 500L
-        mainHandler.postDelayed({
+        // Any queue left over from a previous run dies here, whatever ended it.
+        sewRunHandler?.removeCallbacksAndMessages(null)
+        val runHandler = Handler(Looper.getMainLooper())
+        sewRunHandler = runHandler
+        runHandler.postDelayed({
             if (!sewInputInProgress) return@postDelayed
             step1FindWindow(calibration, effectiveTarget, testMode, effectiveBarcode, onResult, onStep)
         }, startDelay)
@@ -453,87 +360,24 @@ class ScannerAccessibilityService : AccessibilityService() {
         for (win in windows) {
             if (!win.isActive) continue
             if (win.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
-            val pkg = win.root?.packageName?.toString() ?: continue
-            if (pkg in SupportedBrowsers.SUPPORTED_PACKAGES) {
-                return pkg
+            val root = win.root ?: continue
+            try {
+                val pkg = root.packageName?.toString() ?: continue
+                if (pkg in SupportedBrowsers.SUPPORTED_PACKAGES) {
+                    return pkg
+                }
+            } finally {
+                root.safeRecycle()
             }
         }
         return null
     }
 
-    fun isTargetWindowActive(targetPackage: String): Boolean {
-        return findTargetWindow(targetPackage) != null
-    }
-
-    fun debugActiveWindows(): List<String> {
-        return windows.filter { it.isActive }
-            .mapNotNull { it.root?.packageName?.toString() }
-            .distinct()
-    }
-
-    fun ensureTargetWindowActive(
-        activity: android.app.Activity,
-        targetPackage: String,
-        onResult: (active: Boolean) -> Unit
-    ) {
-        if (targetPackage.isEmpty()) { onResult(true); return }
-        if (isTargetWindowActive(targetPackage)) {
-            android.util.Log.d("ScannerAccessibilityService", "ensureTarget: $targetPackage already active")
-            onResult(true)
-            return
-        }
-        android.util.Log.d(
-            "ScannerAccessibilityService",
-            "ensureTarget: $targetPackage not in windows; windows=${debugActiveWindows()}"
-        )
-        val launchIntent = android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
-            setPackage(targetPackage)
-            addFlags(
-                android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
-                    android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-            )
-        }
-        try {
-            activity.startActivity(launchIntent)
-            android.util.Log.d("ScannerAccessibilityService", "ensureTarget: startActivity sent")
-        } catch (e: Exception) {
-            android.util.Log.w(
-                "ScannerAccessibilityService",
-                "ensureTarget: launch failed for $targetPackage: ${e.message}"
-            )
-        }
-        pollForTargetActive(targetPackage, attemptsLeft = 15, onResult = onResult)
-    }
-
-    private fun pollForTargetActive(
-        targetPackage: String,
-        attemptsLeft: Int,
-        onResult: (Boolean) -> Unit
-    ) {
-        if (attemptsLeft <= 0) {
-            android.util.Log.d(
-                "ScannerAccessibilityService",
-                "ensureTarget: poll exhausted for $targetPackage; final windows=${debugActiveWindows()}"
-            )
-            onResult(false)
-            return
-        }
-        if (isTargetWindowActive(targetPackage)) {
-            android.util.Log.d(
-                "ScannerAccessibilityService",
-                "ensureTarget: $targetPackage active after ${(15 - attemptsLeft) * 200}ms"
-            )
-            onResult(true)
-            return
-        }
-        mainHandler.postDelayed({
-            pollForTargetActive(targetPackage, attemptsLeft - 1, onResult)
-        }, 200L)
-    }
-
     fun cancelOngoingSewInput(message: String = "Отменено") {
         if (!sewInputInProgress) return
-        watchdogHandler.removeCallbacksAndMessages(null)
+        sewRunHandler?.removeCallbacksAndMessages(null)
+        sewRunHandler = null
+        pendingWatchdog = null
         sewInputInProgress = false
         val cb = pendingSewResult
         pendingSewResult = null
@@ -543,13 +387,23 @@ class ScannerAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * Arms the run watchdog on the run's own handler, so it dies with the run instead
+     * of being able to fire into the next one.
+     *
+     * Re-arming cancels the previous watchdog: every phase gets its own full
+     * `watchdogTimeoutMs` budget (step1 alone is allowed 25 x 300ms = 7.5s).
+     */
     private fun armWatchdog(onResult: SewInputCallback) {
-        watchdogHandler.removeCallbacksAndMessages(null)
-        watchdogHandler.postDelayed({
-            if (sewInputInProgress && !sewResultDelivered) {
-                releaseWatchdogAndFinish(onResult, false, "Таймаут")
-            }
-        }, watchdogTimeoutMs)
+        val handler = sewRunHandler ?: return
+        pendingWatchdog?.let { handler.removeCallbacks(it) }
+        val watchdog = Runnable {
+            pendingWatchdog = null
+            if (!sewInputInProgress || sewResultDelivered) return@Runnable
+            releaseWatchdogAndFinish(onResult, false, "Таймаут")
+        }
+        pendingWatchdog = watchdog
+        handler.postDelayed(watchdog, watchdogTimeoutMs)
     }
 
     private fun step1FindWindow(
@@ -567,28 +421,42 @@ class ScannerAccessibilityService : AccessibilityService() {
             onStep?.invoke("SEW найден", true, null)
             armWatchdog(onResult)
             val findDelay = if (isFastMode) 500L else 1000L
-            mainHandler.postDelayed({
+            sewRunHandler?.postDelayed({
                 if (!sewInputInProgress) return@postDelayed
                 step2ClickOpenModal(calibration, testMode, effectiveBarcode, onResult, onStep)
             }, findDelay)
             return
         }
-        pollForTargetWindow(calibration, targetPackage, testMode, effectiveBarcode, onResult, onStep, attemptsLeft = 30)
+        // 25 попыток × 300мс = 7.5с — гарантированно меньше watchdog (8с):
+        // иначе watchdog финиширует раньше, а поздний тик дёргает onStep после результата.
+        pollForTargetWindow(calibration, targetPackage, testMode, effectiveBarcode, onResult, onStep, attemptsLeft = 25)
     }
 
     private fun findTargetWindow(targetPackage: String?): AccessibilityWindowInfo? {
-        val byPreferred = if (targetPackage.isNullOrEmpty()) null else windows.firstOrNull {
-            it.root?.packageName == targetPackage && it.isActive
-        }
-        if (byPreferred != null) {
-            if (lastEffectiveTarget != targetPackage) lastEffectiveTarget = targetPackage ?: ""
-            return byPreferred
-        }
-        val byFallback = windows.firstOrNull { w ->
-            w.isActive && SupportedBrowsers.SUPPORTED_PACKAGES.contains(w.root?.packageName?.toString())
+        // Явные циклы вместо firstOrNull-лямбд: каждый win.root создаёт объект,
+        // который обязан быть recycled — в лямбде его не закрыть.
+        var byFallback: AccessibilityWindowInfo? = null
+        var fallbackPkg = ""
+        for (w in windows) {
+            if (!w.isActive) continue
+            val root = w.root ?: continue
+            val pkg: String
+            try {
+                pkg = root.packageName?.toString() ?: continue
+            } finally {
+                root.safeRecycle()
+            }
+            if (!targetPackage.isNullOrEmpty() && pkg == targetPackage) {
+                if (lastEffectiveTarget != targetPackage) lastEffectiveTarget = targetPackage
+                return w
+            }
+            if (byFallback == null && pkg in SupportedBrowsers.SUPPORTED_PACKAGES) {
+                byFallback = w
+                fallbackPkg = pkg
+            }
         }
         if (byFallback != null) {
-            val actualPkg = byFallback.root?.packageName?.toString() ?: ""
+            val actualPkg = fallbackPkg
             if (lastEffectiveTarget != actualPkg) {
                 lastEffectiveTarget = actualPkg
                 if (BuildConfig.DEBUG) android.util.Log.d(
@@ -608,6 +476,7 @@ class ScannerAccessibilityService : AccessibilityService() {
             val root = win.root
             val pkg = root?.packageName?.toString() ?: "<null>"
             val cls = root?.className?.toString() ?: "<null>"
+            root?.safeRecycle()
             snap.append(" | w[").append(i).append("] active=").append(win.isActive)
                 .append(" type=").append(win.type)
                 .append(" pkg=").append(pkg)
@@ -654,7 +523,14 @@ class ScannerAccessibilityService : AccessibilityService() {
         if (attemptsLeft <= 0) {
             logWindowsSnapshot("step1.poll.exhausted", targetPackage)
             val activePkgs = windows.filter { it.isActive }
-                .mapNotNull { it.root?.packageName?.toString() }
+                .mapNotNull {
+                    val r = it.root ?: return@mapNotNull null
+                    try {
+                        r.packageName?.toString()
+                    } finally {
+                        r.safeRecycle()
+                    }
+                }
                 .distinct()
                 .joinToString(", ")
             val msg = if (activePkgs.isBlank()) {
@@ -665,25 +541,30 @@ class ScannerAccessibilityService : AccessibilityService() {
             releaseWatchdogAndFinish(onResult, false, msg)
             return
         }
-        mainHandler.postDelayed({
+        sewRunHandler?.postDelayed({
+            // Прогон уже завершён (watchdog/отмена): поздний тик молча гаснет,
+            // onStep после финального onResult недопустим.
+            if (!sewInputInProgress || sewResultDelivered) return@postDelayed
             val t = findTargetWindow(targetPackage)
             if (t != null) {
                 logWindowsSnapshot("step1.poll.found", targetPackage)
                 onStep?.invoke("SEW найден", true, null)
                 armWatchdog(onResult)
                 val pollFindDelay = if (isFastMode) 500L else 1000L
-                mainHandler.postDelayed({
+                sewRunHandler?.postDelayed({
                     if (!sewInputInProgress) return@postDelayed
                     step2ClickOpenModal(calibration, testMode, effectiveBarcode, onResult, onStep)
                 }, pollFindDelay)
             } else {
-                if (attemptsLeft == 30 || attemptsLeft % 10 == 0) {
+                if (attemptsLeft == 25 || attemptsLeft % 10 == 0) {
                     logWindowsSnapshot("step1.poll.tick$attemptsLeft", targetPackage)
                 }
                 if (BuildConfig.DEBUG && (attemptsLeft == 25 || attemptsLeft == 15 || attemptsLeft == 5)) {
                     val activeDetails = windows.filter { it.isActive }.joinToString("; ") { w ->
-                        val pkg = w.root?.packageName?.toString() ?: "<null>"
-                        val cls = w.root?.className?.toString()?.substringAfterLast('.') ?: "<null>"
+                        val wr = w.root
+                        val pkg = wr?.packageName?.toString() ?: "<null>"
+                        val cls = wr?.className?.toString()?.substringAfterLast('.') ?: "<null>"
+                        wr?.safeRecycle()
                         "type=${w.type} pkg=$pkg cls=$cls"
                     }
                     android.util.Log.d(
@@ -737,7 +618,7 @@ class ScannerAccessibilityService : AccessibilityService() {
         if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "tryOpenModal: dispatchGesture accepted=$accepted point=(${point.x},${point.y}) attemptsLeft=$attemptsLeft")
         if (!accepted) {
             if (attemptsLeft > 1) {
-                mainHandler.postDelayed({
+                sewRunHandler?.postDelayed({
                     if (!sewInputInProgress) return@postDelayed
                     tryOpenModal(calibration, point, testMode, effectiveBarcode, onResult, onStep, attemptsLeft - 1)
                 }, 300L)
@@ -772,13 +653,19 @@ class ScannerAccessibilityService : AccessibilityService() {
         }
         // First attempt: wait for modal to fully open before searching
         if (pollAttemptsLeft == maxAttempts) {
-            mainHandler.postDelayed({
+            sewRunHandler?.postDelayed({
                 if (!sewInputInProgress) return@postDelayed
                 pollForModalOrInput(calibration, testMode, effectiveBarcode, onResult, onStep, pollAttemptsLeft - 1, maxAttempts)
             }, if (isFastMode) 600L else 1000L)
             return
         }
         // Poll for input field — prefer placeholder match, then focus, then any editable in SEW window
+        // Каждый тик перевзводит watchdog: findModalInputField() делает полный BFS по DOM
+        // SEW во всех окнах, и на тяжёлой странице один проход занимает сотни мс. Общий
+        // бюджет 8с тогда истекал бы на живом, просто медленном опросе и давал ложный
+        // «Таймаут». С перевзводом watchdog означает «нет прогресса 8с»; при этом он не
+        // может прервать текущий тик — тики и watchdog стоят в одной очереди looper'а.
+        armWatchdog(onResult)
         val foundInput = findModalInputField()
         if (BuildConfig.DEBUG) {
             val pkg = foundInput?.packageName?.toString() ?: "<null>"
@@ -792,22 +679,26 @@ class ScannerAccessibilityService : AccessibilityService() {
             step3FindInput(foundInput, effectiveBarcode, calibration, testMode, onResult, onStep)
             return
         }
-        mainHandler.postDelayed({
+        sewRunHandler?.postDelayed({
             if (!sewInputInProgress) return@postDelayed
             pollForModalOrInput(calibration, testMode, effectiveBarcode, onResult, onStep, pollAttemptsLeft - 1, maxAttempts)
         }, 50L)
     }
 
+    private fun isSewNodePackage(node: AccessibilityNodeInfo): Boolean {
+        val pkg = node.packageName?.toString() ?: return false
+        if (pkg == BuildConfig.APPLICATION_ID) return false
+        return pkg == lastEffectiveTarget || pkg in SupportedBrowsers.SUPPORTED_PACKAGES
+    }
+
     private fun findModalInputField(): AccessibilityNodeInfo? {
-        val ownPkg = BuildConfig.APPLICATION_ID
         // Priority 1: placeholder "Штрих-код" — most reliable for SEW modal
         val byPlaceholder = findInputByPlaceholder("Штрих-код")
         if (byPlaceholder != null) return byPlaceholder
         // Priority 2: focused editable in a SEW browser window (not our own overlay)
         val focusInput = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
         if (focusInput != null && focusInput.isEditable) {
-            val pkg = focusInput.packageName?.toString() ?: ""
-            if (pkg != ownPkg) return focusInput
+            if (isSewNodePackage(focusInput)) return focusInput
             focusInput.safeRecycle()
         } else {
             focusInput?.safeRecycle()
@@ -816,8 +707,7 @@ class ScannerAccessibilityService : AccessibilityService() {
         for (win in windows) {
             if (!win.isActive) continue
             val root = win.root ?: continue
-            val pkg = root.packageName?.toString() ?: ""
-            if (pkg == ownPkg) {
+            if (!isSewNodePackage(root)) {
                 root.safeRecycle()
                 continue
             }
@@ -830,7 +720,7 @@ class ScannerAccessibilityService : AccessibilityService() {
 
     private fun findInputFieldAcrossWindows(): AccessibilityNodeInfo? {
         val fromFocus = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-        if (fromFocus != null && fromFocus.isEditable) return fromFocus
+        if (fromFocus != null && fromFocus.isEditable && isSewNodePackage(fromFocus)) return fromFocus
         fromFocus?.safeRecycle()
 
         val fromPlaceholder = findInputByPlaceholder("Штрих-код")
@@ -839,6 +729,10 @@ class ScannerAccessibilityService : AccessibilityService() {
         for (win in windows) {
             if (!win.isActive) continue
             val root = win.root ?: continue
+            if (!isSewNodePackage(root)) {
+                root.safeRecycle()
+                continue
+            }
             val editable = findFirstEditable(root)
             root.safeRecycle()
             if (editable != null) return editable
@@ -848,7 +742,10 @@ class ScannerAccessibilityService : AccessibilityService() {
 
     private fun findFirstEditable(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         val queue = java.util.ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
+        // root не возвращаем (см. findInputField): вызывающий ресайклит root после поиска.
+        for (i in 0 until root.childCount) {
+            root.getChild(i)?.let { queue.add(it) }
+        }
         var depth = 0
         while (queue.isNotEmpty() && depth < 50) {
             repeat(queue.size) {
@@ -885,7 +782,15 @@ class ScannerAccessibilityService : AccessibilityService() {
 
     private fun findInputByPlaceholder(text: String): AccessibilityNodeInfo? {
         for (win in windows) {
+            // Как и в findModalInputField/findInputFieldAcrossWindows: неактивное окно
+            // исключаем. Без этой проверки при двух открытых браузерах (например, Chrome
+            // с SEW и Edge рядом) штрихкод ушёл бы в поле фонового окна.
+            if (!win.isActive) continue
             val root = win.root ?: continue
+            if (!isSewNodePackage(root)) {
+                root.safeRecycle()
+                continue
+            }
             val found = findNodeContaining(root, text)
             if (found != null) {
                 if (found.isEditable) {
@@ -921,18 +826,19 @@ class ScannerAccessibilityService : AccessibilityService() {
             )
         }
         inputNode.refresh()
-        val ok = inputNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        val ok = safePerformAction(inputNode, AccessibilityNodeInfo.ACTION_SET_TEXT, args)
         if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "step4SetText: ACTION_SET_TEXT ok=$ok pkg=${inputNode.packageName} text='$barcode' editable=${inputNode.isEditable} focused=${inputNode.isFocused}")
         if (!ok) {
-            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "step4SetText: SET_TEXT FAILED, using clipboard fallback")
-            val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-            val original = clipboard.primaryClip
-            pendingClipboardRestore = original
-            clipboard.setPrimaryClip(ClipData.newPlainText("barcode", barcode))
-            inputNode.refresh()
-            val focusOk = inputNode.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            // Общий буфер обмена в SEW-пайплайне не используется: здесь нет ни ACTION_PASTE,
+            // ни вставки из контекстного меню — единственный механизм ввода это ACTION_SET_TEXT
+            // с повтором после фокусировки. Запись в буфер могла только затереть данные
+            // пользователя, причём безвозвратно: с API 29 приложение без фокуса (наш
+            // AccessibilityService, пока в фокусе SEW) не читает primaryClip, поэтому
+            // restoreClipboardIfOurs никогда не подтвердил бы, что в буфере наш текст.
+            if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "step4SetText: SET_TEXT FAILED, retry with focus")
+            val focusOk = safePerformAction(inputNode, AccessibilityNodeInfo.ACTION_FOCUS)
             if (BuildConfig.DEBUG) android.util.Log.d("ScannerAccessibility", "step4SetText: ACTION_FOCUS ok=$focusOk")
-            mainHandler.postDelayed({
+            sewRunHandler?.postDelayed({
                 inputNode.safeRecycle()
                 val pasted = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
                 if (!sewInputInProgress || sewResultDelivered) {
@@ -953,8 +859,11 @@ class ScannerAccessibilityService : AccessibilityService() {
             }, 250L)
             return
         }
-        mainHandler.postDelayed({
+        sewRunHandler?.postDelayed({
             if (testMode) {
+                // In test mode nothing else owns inputNode, so it must be released here or
+                // every "Тест калибровки" run leaks one native AccessibilityNodeInfo peer.
+                inputNode.safeRecycle()
                 onStep?.invoke("Ввод работает", true, null)
                 armWatchdog(onResult)
                 step6ClickConfirm(calibration, testMode, onResult, onStep)
@@ -982,7 +891,12 @@ class ScannerAccessibilityService : AccessibilityService() {
             }
             inputNode.safeRecycle()
         } catch (_: Exception) {
+            // The node went stale or was recycled, so the text could not be read back.
+            // Treat it as a failure: falling through would report success and tap
+            // "Готово" while the barcode was never actually entered.
             inputNode.safeRecycle()
+            releaseWatchdogAndFinish(onResult, false, "Не удалось проверить ввод")
+            return
         }
         onStep?.invoke("Ввод работает", true, null)
         armWatchdog(onResult)
@@ -995,7 +909,7 @@ class ScannerAccessibilityService : AccessibilityService() {
         onResult: SewInputCallback,
         onStep: SewStepCallback?
     ) {
-        mainHandler.postDelayed({
+        sewRunHandler?.postDelayed({
             if (!sewInputInProgress) return@postDelayed
             step6ClickConfirm(calibration, testMode, onResult, onStep)
         }, 200L)
@@ -1011,6 +925,10 @@ class ScannerAccessibilityService : AccessibilityService() {
         var textNode: AccessibilityNodeInfo? = null
         for (win in windows) {
             val root = win.root ?: continue
+            if (!isSewNodePackage(root)) {
+                root.safeRecycle()
+                continue
+            }
             textNode = findSendButton(root, buttonTexts)
             if (textNode != null) {
                 root.safeRecycle()
@@ -1071,7 +989,7 @@ class ScannerAccessibilityService : AccessibilityService() {
             releaseWatchdogAndFinish(onResult, false, "Не удалось нажать Готово")
             return
         }
-        mainHandler.postDelayed({
+        sewRunHandler?.postDelayed({
             if (!sewInputInProgress) return@postDelayed
             if (testMode) {
                 releaseWatchdogAndFinish(onResult, true, "Тест пройден")
@@ -1092,6 +1010,10 @@ class ScannerAccessibilityService : AccessibilityService() {
         for (win in windows) {
             if (!win.isActive) continue
             val root = win.root ?: continue
+            if (!isSewNodePackage(root)) {
+                root.safeRecycle()
+                continue
+            }
             val found = findSendButton(root, buttonTexts)
             if (found != null) {
                 found.safeRecycle()
@@ -1104,11 +1026,16 @@ class ScannerAccessibilityService : AccessibilityService() {
     }
 
     private fun releaseWatchdogAndFinish(onResult: SewInputCallback, ok: Boolean, message: String) {
-        watchdogHandler.removeCallbacksAndMessages(null)
-        sewInputInProgress = false
+        // Wipe the run's queue first: every step of this run that has not executed yet
+        // dies here, so it cannot resume after the run is over.
+        sewRunHandler?.removeCallbacksAndMessages(null)
+        pendingWatchdog = null
         if (sewResultDelivered) return
         sewResultDelivered = true
+        sewInputInProgress = false
+        restoreClipboardIfOurs(lastInjectedText)
         pendingSewResult = null
+        sewRunHandler = null
         onResult(ok, message)
     }
 

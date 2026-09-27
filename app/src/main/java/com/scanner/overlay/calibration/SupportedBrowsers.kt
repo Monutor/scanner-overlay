@@ -29,7 +29,15 @@ object SupportedBrowsers {
     fun getInstalled(context: Context): List<SupportedBrowser> {
         val pm = context.packageManager
         return candidates.filter { browser ->
-            runCatching { pm.getPackageInfo(browser.packageName, 0) }.isSuccess
+            // getPackageInfo() also succeeds for a disabled app and for a package the user
+            // cannot launch (hidden by package visibility on API 30+). Such a browser would be
+            // offered in the picker, could become calibration.targetPackage, and then every
+            // run would fail on step 1 because findTargetWindow() never sees its window.
+            runCatching {
+                val info = pm.getPackageInfo(browser.packageName, 0)
+                info.applicationInfo?.enabled == true &&
+                    pm.getLaunchIntentForPackage(browser.packageName) != null
+            }.getOrDefault(false)
         }
     }
 }
