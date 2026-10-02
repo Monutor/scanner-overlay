@@ -1595,11 +1595,22 @@ private fun RestartProcessCard() {
                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
                         }
                         if (intent != null) {
+                            // Настройки пишутся через SharedPreferences.apply(), который только
+                            // ставит запись в очередь и реально пишет файл на следующем цикле
+                            // главного потока. Убийство процесса обрывает и очередь, и сам файл —
+                            // commit() ждёт записи на диск, поэтому после killProcess() настройки
+                            // не потеряются.
+                            runCatching {
+                                context.getSharedPreferences(
+                                    "scanner_prefs",
+                                    android.content.Context.MODE_PRIVATE
+                                ).edit().commit()
+                            }
                             context.startActivity(intent)
-                            // Не вызываем Runtime.exit(0): жёсткое убийство процесса прерывает флуш
-                            // SharedPreferences.apply() и теряет сохранённые настройки. Задачу закрываем через
-                            // finishAffinity — процесс остаётся жив, настройки сохраняются, приложение перезапускается из launcher.
-                            (context as? android.app.Activity)?.finishAffinity()
+                            // Убиваем процесс жёстко: ProcessCameraProvider — синглтон на весь
+                            // процесс, поэтому finishAffinity() оставлял залипшее состояние камеры
+                            // жить (та же самая Activity перезапускалась, PID не менялся).
+                            android.os.Process.killProcess(android.os.Process.myPid())
                         }
                     },
                     colors = ButtonDefaults.buttonColors(

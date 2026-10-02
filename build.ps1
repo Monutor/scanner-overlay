@@ -49,9 +49,20 @@ switch ($args[0]) {
     $sha256 = (Get-FileHash -Path $apkPath -Algorithm SHA256).Hash.ToLower()
     Write-Host ("SHA-256: " + $sha256) -ForegroundColor Cyan
 
-    # Create update.json with release notes
+    # Create update.json with release notes.
+    # Notes come from the 2nd argument; "\n" in it becomes a real line break so the
+    # whole note block can be passed as one command-line string.
+    $notes = if ($args.Count -gt 1) { $args[1] -replace '\\n', "`n" } else { "Release $versionName" }
     $downloadUrl = "https://github.com/Monutor/scanner-overlay/releases/download/v" + $versionName + "/app-release.apk"
-    $json = "{`"versionCode`":$versionCode,`"versionName`":`"$versionName`",`"downloadUrl`":`"$downloadUrl`",`"sha256`":`"$sha256`",`"releaseNotes`":`"Release $versionName`"}"
+    # Built via ConvertTo-Json: release notes contain quotes and line breaks, which
+    # hand-concatenated string interpolation would happily corrupt.
+    $json = [ordered]@{
+      versionCode   = [int]$versionCode
+      versionName   = $versionName
+      downloadUrl   = $downloadUrl
+      sha256        = $sha256
+      releaseNotes  = $notes
+    } | ConvertTo-Json -Compress
     $bytes = [System.Text.Encoding]::ASCII.GetBytes($json)
     [System.IO.File]::WriteAllBytes((Resolve-Path ".").Path + "\update.json", $bytes)
 
@@ -83,7 +94,7 @@ switch ($args[0]) {
     # Create GitHub release and upload assets
     $asset1 = $apkPath + "#app-release.apk"
     $asset2 = "update.json#update.json"
-    & $ghPath release create $tag --title $tag --notes ("Release " + $tag) $asset1 $asset2
+    & $ghPath release create $tag --title $tag --notes $notes $asset1 $asset2
 
     if ($LASTEXITCODE -eq 0) {
       Write-Host ("Release " + $tag + " published!") -ForegroundColor Green

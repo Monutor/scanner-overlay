@@ -23,6 +23,7 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
+import androidx.camera.core.ZoomState
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
@@ -39,6 +40,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -50,6 +52,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Observer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
@@ -78,6 +81,8 @@ import com.scanner.overlay.accessibility.ScannerAccessibilityService
 import com.scanner.overlay.scanner.ArticleBarcodeDatabase
 import com.scanner.overlay.scanner.BarcodeAnalyzer
 import com.scanner.overlay.scanner.BarcodeDatabase
+import com.scanner.overlay.scanner.BarcodeOutline
+import com.scanner.overlay.scanner.BarcodeQuad
 import com.scanner.overlay.scanner.ScanHistoryEntry
 import com.scanner.overlay.scanner.ScannerResult
 import com.scanner.overlay.calibration.SewCalibration
@@ -505,6 +510,11 @@ fun OverlayContent(
     var previewView by remember { mutableStateOf<PreviewView?>(null) }
     var focusPoint by remember { mutableStateOf<Offset?>(null) }
     var focusSuccess by remember { mutableStateOf<Boolean?>(null) }
+    val trackedQuad = remember { mutableStateOf<BarcodeQuad?>(null) }
+    // Зум камеры. Диапазон приходит от CameraX (он зависит от объектива), поэтому
+    // до рапорта границ держим 1f..1f: «+» неактивна, «−» тоже — сжать нечего.
+    var zoomRatio by remember { mutableStateOf(1f) }
+    var zoomBounds by remember { mutableStateOf<ClosedFloatingPointRange<Float>>(1f..1f) }
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -537,6 +547,7 @@ fun OverlayContent(
                 android.util.Log.d("ScanFlow", "LaunchedEffect: state=Scanning, reset detectedBarcode")
                 detectedBarcode = false
             }
+            trackedQuad.value = null
         }
         if (state is OverlayViewModel.OverlayState.Success) {
             val s = state as OverlayViewModel.OverlayState.Success
@@ -597,9 +608,17 @@ fun OverlayContent(
                     // Грант из лаунчера/onResume включает превью через рекомпозицию.
                     if (hasCameraPermission.value) {
                     key(cameraInitAttempt) {
-                    CameraPreview(
+CameraPreview(
                         torchOn = torchOn,
                         onCopyToClipboard = onCopyToClipboardForSew,
+                        trackedQuad = trackedQuad,
+                            zoomRatio = zoomRatio,
+                            onZoomRange = { min, max ->
+                                zoomBounds = min..max
+                                // Каждое открытие камеры — с 1×: иначе увеличение из
+                                // прошлого сеанса пережило бы переподключение.
+                                zoomRatio = 1f.coerceIn(min, max)
+                            },
                             onCameraReady = { control, view ->
                                 cameraControl = control
                                 previewView = view
@@ -680,20 +699,10 @@ fun OverlayContent(
                         }
                     }
 
-                // Green highlight box (centered, on detection)
-                if (detectedBarcode) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 32.dp)
-                            .height(80.dp)
-                            .align(Alignment.Center)
-                            .background(Color(0x204CAF50), RoundedCornerShape(8.dp))
-                            .border(2.dp, Color(0xFF4CAF50), RoundedCornerShape(8.dp))
-                    )
-                }
+                // Раньше здесь был статичный «green highlight box» — полупрозрачная полоса
+                // по центру рамки. Заменён живым контуром BarcodeOutline по самому коду.
 
-                // Corner accents + scan line (only during active scanning)
+                // Corner accents + live barcode outline (only during active scanning)
                 if (state !is OverlayViewModel.OverlayState.Success
                     && state !is OverlayViewModel.OverlayState.Error && !isTimedOut) {
 
@@ -714,18 +723,9 @@ fun OverlayContent(
                         drawLine(c, Offset(size.width - m, size.height - m), Offset(size.width - m, size.height - m - s), w, cap = StrokeCap.Round)
                     }
 
-                    // Static centered scan line
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 8.dp)
-                            .height(2.dp)
-                            .align(Alignment.Center)
-                            .background(
-                                if (detectedBarcode) Color(0xFF00E676) else Color(0xAAFFFFFF),
-                                RoundedCornerShape(1.dp)
-                            )
-                    )
+                    // Живой контур по самому штрихкоду (ML Kit cornerPoints) - показывает,
+                    // где код на самом деле, вместо статичной полосы по центру рамки.
+                    BarcodeOutline(quad = trackedQuad, modifier = Modifier.fillMaxSize())
                 }
 
                 FocusIndicator(point = focusPoint, success = focusSuccess)
@@ -744,6 +744,13 @@ fun OverlayContent(
 
                 Spacer(Modifier.height(16.dp))
 
+                // setZoomRatio не клампит значение (документация CameraX): вне
+                // [minZoomRatio, maxZoomRatio] он роняет ListenableFuture с
+                // IllegalArgumentException. Поэтому диапазон и кламп — здесь,
+                // в одном месте, а в CameraControl уходит уже готовое число.
+                val canZoomIn = zoomRatio < zoomBounds.endInclusive - ZOOM_BOUND_EPS
+                val canZoomOut = zoomRatio > zoomBounds.start + ZOOM_BOUND_EPS
+
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -758,6 +765,34 @@ fun OverlayContent(
                     ) {
                         Text("⚡", fontSize = 14.sp,
                             color = if (torchOn) Color(0xFFFFD600) else Color(0x99FFFFFF))
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0x0DFFFFFF))
+                            .alpha(if (canZoomOut) 1f else 0.35f)
+                            .clickable(enabled = canZoomOut) {
+                                zoomRatio = (zoomRatio / ZOOM_STEP)
+                                    .coerceIn(zoomBounds.start, zoomBounds.endInclusive)
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("−", fontSize = 20.sp, color = Color(0x99FFFFFF))
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0x0DFFFFFF))
+                            .alpha(if (canZoomIn) 1f else 0.35f)
+                            .clickable(enabled = canZoomIn) {
+                                zoomRatio = (zoomRatio * ZOOM_STEP)
+                                    .coerceIn(zoomBounds.start, zoomBounds.endInclusive)
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("+", fontSize = 18.sp, color = Color(0x99FFFFFF))
                     }
                     Box(
                         modifier = Modifier
@@ -950,11 +985,23 @@ fun OverlayContent(
  */
 private const val SCAN_ERROR_STREAK_THRESHOLD = 5
 
+/**
+ * Шаг зума за нажатие кнопки «+»/«−». Умножаем, а не складываем: сетка зума
+ * неравномерна, множитель даёт ровные «шаги» ощущения на любом объективе.
+ */
+private const val ZOOM_STEP = 1.5f
+
+/** Запас для сравнения с границей диапазона — float-шум вокруг max/min. */
+private const val ZOOM_BOUND_EPS = 0.01f
+
 @Composable
 fun CameraPreview(
     torchOn: Boolean = false,
     onBarcodeScanned: (ScannerResult.Success) -> Unit,
     onCopyToClipboard: (String) -> Unit,
+    trackedQuad: MutableState<BarcodeQuad?>,
+    zoomRatio: Float = 1f,
+    onZoomRange: (Float, Float) -> Unit = { _, _ -> },
     resetScanCompleted: Boolean = false,
     onCameraReady: (CameraControl, PreviewView) -> Unit = { _, _ -> },
     onCameraError: (Exception) -> Unit = {},
@@ -980,6 +1027,7 @@ fun CameraPreview(
         }
     }
     val cameraProviderRef = remember { mutableStateOf<ProcessCameraProvider?>(null) }
+    val openWatchRef = remember { mutableStateOf<CameraBinding.OpenWatch?>(null) }
     val analyzerExecutor = remember { java.util.concurrent.Executors.newSingleThreadScheduledExecutor() }
     val isActive = remember { AtomicBoolean(true) }
 
@@ -989,6 +1037,8 @@ fun CameraPreview(
     val releaseCamera: () -> Unit = remember {
         fun() {
             if (!cleanedUp.compareAndSet(false, true)) return
+            openWatchRef.value?.cancel()
+            openWatchRef.value = null
             try {
                 val provider = cameraProviderRef.value
                 val useCases = listOfNotNull(previewUseCase.value, analysisUseCase.value)
@@ -1022,6 +1072,14 @@ fun CameraPreview(
     LaunchedEffect(torchOn, cameraControl.value) {
         try {
             cameraControl.value?.enableTorch(torchOn)
+        } catch (_: Exception) {}
+    }
+
+    // zoomRatio приходит уже клампнутым (кламп — в вызывающей композабле, где
+    // живут границы), поэтому здесь только применяем.
+    LaunchedEffect(zoomRatio, cameraControl.value) {
+        try {
+            cameraControl.value?.setZoomRatio(zoomRatio)
         } catch (_: Exception) {}
     }
 
@@ -1085,6 +1143,9 @@ fun CameraPreview(
                             analyzerExecutor,
                             BarcodeAnalyzer(
                                 scanQrCode = scanQrCodePref,
+                                onBarcodeTracked = { quad ->
+                                    cameraFrameHandler.post { trackedQuad.value = quad }
+                                },
                                 onResult = { result ->
                                     cameraFrameHandler.post {
                                         try {
@@ -1133,6 +1194,30 @@ fun CameraPreview(
                         analysisUseCase.value = imageAnalysis
                         cameraControl.value = camera.cameraControl
                         onCameraReady(camera.cameraControl, previewView)
+                        // Границы зума приходят асинхронно (zoomState.value сразу после
+                        // bind обычно ещё null), поэтому читаем их одноразовым
+                        // наблюдателем, который снимает себя сам. Повторная
+                        // регистрация при пересоздании AndroidView безвредна — придёт
+                        // то же значение.
+                        val zoomState = camera.cameraInfo.zoomState
+                        lateinit var zoomObserver: Observer<ZoomState>
+                        zoomObserver = Observer<ZoomState> { zs ->
+                            if (zs != null) {
+                                onZoomRange(zs.minZoomRatio, zs.maxZoomRatio)
+                                zoomState.removeObserver(zoomObserver)
+                            }
+                        }
+                        zoomState.observeForever(zoomObserver)
+                        openWatchRef.value?.cancel()
+                        openWatchRef.value = CameraBinding.watchOpenState(
+                            camera, mainHandler
+                        ) { reason ->
+                            android.util.Log.e("CameraPreview", "camera did not open: $reason")
+                            val providerForReset = cameraProviderRef.value
+                            releaseCamera()
+                            CameraBinding.forceReset(providerForReset)
+                            onCameraError(IllegalStateException(reason))
+                        }
                     } catch (e: Exception) {
                         android.util.Log.e("CameraPreview", "bindToLifecycle failed", e)
                         // Free the analyzer thread + MLKit scanner right away instead of

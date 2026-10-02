@@ -48,6 +48,8 @@ import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import com.scanner.overlay.overlay.CameraBinding
+import com.scanner.overlay.scanner.BarcodeOutline
+import com.scanner.overlay.scanner.BarcodeQuad
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -119,6 +121,7 @@ private fun QrScannerScreen(
         }
     ) { padding ->
         if (permissionGranted) {
+            val trackedQuad = remember { mutableStateOf<BarcodeQuad?>(null) }
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -126,9 +129,10 @@ private fun QrScannerScreen(
             ) {
                 QrCameraView(
                     modifier = Modifier.fillMaxSize(),
-                    onQrDetected = onScanned
+                    onQrDetected = onScanned,
+                    onQrTracked = { quad -> trackedQuad.value = quad }
                 )
-                ScanFrameOverlay()
+                ScanFrameOverlay(quad = trackedQuad)
             }
         }
     }
@@ -137,11 +141,13 @@ private fun QrScannerScreen(
 @Composable
 private fun QrCameraView(
     modifier: Modifier = Modifier,
-    onQrDetected: (String) -> Unit
+    onQrDetected: (String) -> Unit,
+    onQrTracked: (BarcodeQuad?) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val cameraProviderRef = remember { mutableStateOf<ProcessCameraProvider?>(null) }
+    val openWatchRef = remember { mutableStateOf<CameraBinding.OpenWatch?>(null) }
     val scannerRef = remember { mutableStateOf<BarcodeScanner?>(null) }
     val analyzerExecutor = remember { Executors.newSingleThreadExecutor() }
     val isActive = remember { AtomicBoolean(true) }
@@ -181,16 +187,24 @@ private fun QrCameraView(
                     scannerRef.value = scanner
 
                     imageAnalysis.setAnalyzer(analyzerExecutor) { imageProxy ->
-                        scanQrImage(imageProxy, scanner, detected, onQrDetected)
+                        scanQrImage(imageProxy, scanner, detected, onQrDetected, onQrTracked)
                     }
 
                     cameraProvider.unbindAll()
-                    cameraProvider.bindToLifecycle(
+                    val camera = cameraProvider.bindToLifecycle(
                         lifecycleOwner,
                         CameraSelector.DEFAULT_BACK_CAMERA,
                         preview,
                         imageAnalysis
                     )
+                    openWatchRef.value?.cancel()
+                    openWatchRef.value = CameraBinding.watchOpenState(
+                        camera, mainHandler
+                    ) { reason ->
+                        android.util.Log.e("QrCameraView", "camera did not open: $reason")
+                        CameraBinding.forceReset(cameraProviderRef.value)
+                        cameraProviderRef.value = null
+                    }
                 } catch (e: Exception) {
                     android.util.Log.e("QrCameraView", "Camera init failed", e)
                     // A failed bind may leave use-cases partially attached to the shared
@@ -210,6 +224,8 @@ private fun QrCameraView(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_DESTROY) {
                 isActive.set(false)
+                openWatchRef.value?.cancel()
+                openWatchRef.value = null
                 // forceReset also records the release so the next session respects the cooldown.
                 CameraBinding.forceReset(cameraProviderRef.value)
                 cameraProviderRef.value = null
@@ -221,6 +237,8 @@ private fun QrCameraView(
         onDispose {
             isActive.set(false)
             lifecycleOwner.lifecycle.removeObserver(observer)
+            openWatchRef.value?.cancel()
+            openWatchRef.value = null
             CameraBinding.forceReset(cameraProviderRef.value)
             cameraProviderRef.value = null
             scannerRef.value?.close()
@@ -234,7 +252,8 @@ private fun scanQrImage(
     imageProxy: ImageProxy,
     scanner: BarcodeScanner,
     detected: AtomicBoolean,
-    onQrDetected: (String) -> Unit
+    onQrDetected: (String) -> Unit,
+    onQrTracked: (BarcodeQuad?) -> Unit
 ) {
     if (detected.get()) {
         imageProxy.close()
@@ -243,9 +262,19 @@ private fun scanQrImage(
     val mediaImage = imageProxy.image
     if (mediaImage != null) {
         try {
-            val inputImage = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+            val rotation = imageProxy.imageInfo.rotationDegrees
+            val imgW = imageProxy.width
+            val imgH = imageProxy.height
+            // Размеры кадра ПОСЛЕ поворота: ML Kit отдаёт координаты в upright-пространстве,
+            // поэтому контур считается от них, а не от сырых imageProxy.width/height.
+            val isRotated = rotation == 90 || rotation == 270
+            val uprightW = if (isRotated) imgH else imgW
+            val uprightH = if (isRotated) imgW else imgH
+            val inputImage = InputImage.fromMediaImage(mediaImage, rotation)
             scanner.process(inputImage)
                 .addOnSuccessListener { barcodes ->
+                    val tracked = barcodes.firstOrNull { it.boundingBox != null }
+                    onQrTracked(tracked?.toQuad(uprightW, uprightH))
                     for (barcode in barcodes) {
                         barcode.rawValue?.let { value ->
                             if (detected.compareAndSet(false, true)) {
@@ -268,8 +297,30 @@ private fun scanQrImage(
     }
 }
 
+/**
+ * Углы QR-кода для контура. Сперва `cornerPoints` (учитывают перспективу), при их
+ * отсутствии - 4 угла `boundingBox`, если нет и его - контур просто не рисуется.
+ */
+private fun Barcode.toQuad(frameWidth: Int, frameHeight: Int): BarcodeQuad? {
+    val corners = cornerPoints
+    if (corners != null && corners.size >= 4) {
+        return BarcodeQuad(corners.take(4).toList(), frameWidth, frameHeight)
+    }
+    val box = boundingBox ?: return null
+    return BarcodeQuad(
+        listOf(
+            android.graphics.Point(box.left, box.top),
+            android.graphics.Point(box.right, box.top),
+            android.graphics.Point(box.right, box.bottom),
+            android.graphics.Point(box.left, box.bottom)
+        ),
+        frameWidth,
+        frameHeight
+    )
+}
+
 @Composable
-private fun ScanFrameOverlay() {
+private fun ScanFrameOverlay(quad: androidx.compose.runtime.State<BarcodeQuad?>) {
     val boxFraction = 0.7f          // square side as fraction of min screen dimension
     val scrimAlpha = 0.55f
     val frameColor = Color(0xFF388E3C)   // green
@@ -317,6 +368,9 @@ private fun ScanFrameOverlay() {
                 style = Stroke(width = frameStrokeWidth.toPx())
             )
         }
+
+        // Живой контур по самому QR-коду поверх рамки-подсказки.
+        BarcodeOutline(quad = quad, modifier = Modifier.fillMaxSize())
 
         // Hint text centered horizontally, shifted down to sit just below the frame.
         // constraints здесь в px (DrawScope), поэтому конвертируем px -> Dp, а не трактуем как dp.

@@ -36,8 +36,8 @@ android {
         applicationId = "com.scanner.overlay"
         minSdk = 26
         targetSdk = 36
-        versionCode = 32
-        versionName = "1.21.0"
+        versionCode = 33
+        versionName = "1.22.0"
         // Release ships anonymous (read-only) GitHub access; see `debug` below.
         buildConfigField("String", "GITHUB_TOKEN", "\"\"")
     }

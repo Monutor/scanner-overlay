@@ -15,7 +15,14 @@ class BarcodeAnalyzer(
     private val cooldownMs: Long = 2000L,
     private val startupDelayMs: Long = 1500L,
     private val scanQrCode: Boolean = true,
-    private val onResult: (ScannerResult) -> Unit
+    private val onResult: (ScannerResult) -> Unit,
+    /**
+     * Живой контур вокруг найденного штрихкода. Отдельный сигнал от [onResult] намеренно:
+     * [onResult] срабатывает уже после проверки центра, кулдауна и дедупа, а дальше идёт
+     * `delay()` и запрос к БД - к тому моменту контур показывать поздно. Здесь нужно
+     * положение кода на каждом кадре, включая отклонённые кулдауном.
+     */
+    private val onBarcodeTracked: (BarcodeQuad?) -> Unit = {}
 ) : ImageAnalysis.Analyzer {
     // Монотонные часы: System.currentTimeMillis() прыгает при синхронизации времени,
     // и тогда elapsed становился отрицательным, а условие "прошло ли время запуска"
@@ -116,6 +123,7 @@ class BarcodeAnalyzer(
 
                         if (validBarcodes.isEmpty()) {
                             if (BuildConfig.DEBUG) android.util.Log.w("BarcodeAnalyzer", "No barcodes with boundingBox")
+                            onBarcodeTracked(null)
                             return@addOnSuccessListener
                         }
 
@@ -125,6 +133,10 @@ class BarcodeAnalyzer(
                             val cy = box.centerY().toFloat()
                             Math.hypot(cx.toDouble() - centerImgX.toDouble(), cy.toDouble() - centerImgY.toDouble())
                         }
+
+                        // Контур рисуется ДО проверки расстояния до центра: он должен
+                        // подсказывать, куда наводить даже когда код ещё вне зелёной рамки.
+                        onBarcodeTracked(centerBarcode!!.toQuad(rotW.toInt(), rotH.toInt()))
 
                         val dist = Math.hypot(
                             (centerBarcode!!.boundingBox!!.centerX().toFloat() - centerImgX).toDouble(),
@@ -152,6 +164,8 @@ class BarcodeAnalyzer(
                         }
 
                         handleBarcode(value, centerBarcode.format)
+                    } else {
+                        onBarcodeTracked(null)
                     }
                 }
                 .addOnFailureListener(callbackExecutor) { e ->
@@ -206,4 +220,27 @@ class BarcodeAnalyzer(
     fun close() {
         scanner.close()
     }
+}
+
+/**
+ * Углы штрихкода для отрисовки контура. Сперва `cornerPoints` — они учитывают
+ * перспективную дисторсию, поэтому контур повторит наклон кода. Если углы недоступны,
+ * откатываемся на 4 угла `boundingBox` (прямоугольник), если нет и его - контур не рисуем.
+ */
+private fun Barcode.toQuad(frameWidth: Int, frameHeight: Int): BarcodeQuad? {
+    val corners = cornerPoints
+    if (corners != null && corners.size >= 4) {
+        return BarcodeQuad(corners.take(4).toList(), frameWidth, frameHeight)
+    }
+    val box = boundingBox ?: return null
+    return BarcodeQuad(
+        listOf(
+            android.graphics.Point(box.left, box.top),
+            android.graphics.Point(box.right, box.top),
+            android.graphics.Point(box.right, box.bottom),
+            android.graphics.Point(box.left, box.bottom)
+        ),
+        frameWidth,
+        frameHeight
+    )
 }
